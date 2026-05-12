@@ -93,8 +93,9 @@ class Events(commands.Cog):
                     )
                 )
         else:
-            # No open ticket — find source guild and route
-            await self._handle_new_ticket(message)
+            # No open ticket — ignore unsolicited DM
+            # Relay only operates inside already-established operational context
+            return
 
     async def _trigger_reminders(self, ticket: dict, message: discord.Message) -> None:
         """Trigger response reminders for a ticket when user replies."""
@@ -137,89 +138,6 @@ class Events(commands.Cog):
         await queries.delete_all_reminders_for_ticket(ticket["id"])
         log.info("Cleared all reminders for ticket %s after trigger", ticket["id"])
 
-    async def _handle_new_ticket(self, message: discord.Message) -> None:
-        """Handle a DM from a user with no open ticket."""
-        shared_guilds = [
-            g for g in self.bot.guilds
-            if g.get_member(message.author.id)
-        ]
-
-        if not shared_guilds:
-            await message.channel.send(
-                embed=message_style.error_embed(
-                    "We don't share any servers. Please join a server with Relay first."
-                )
-            )
-            return
-
-        # Determine source guild (first shared guild the user is in)
-        source_guild = shared_guilds[0]
-
-        # Resolve where ticket should be created
-        target_guild, source_guild_id = await ticket_service.resolve_target_guild(
-            source_guild, self.bot,
-        )
-
-        # Check if target guild has categories configured
-        categories = await queries.get_categories(target_guild.id)
-        if categories:
-            cat_list = "\n".join(
-                f"{cat['emoji'] or '📂'} **{cat['name']}** — {cat['description'] or 'No description'}"
-                for cat in categories
-            )
-
-            # Determine guild label based on source/community scope
-            # Avoid presenting support server as user's community origin
-            source_mode = await guild_mode.resolve_guild_mode(source_guild.id)
-            if source_mode == guild_mode.GuildMode.SUPPORT:
-                # User DM'd from support server — reference actual source communities
-                linked_source_ids = await queries.get_source_guilds_for_support(source_guild.id)
-                if len(linked_source_ids) == 1:
-                    # Single linked community: reference it by name
-                    source_guild_obj = self.bot.get_guild(linked_source_ids[0])
-                    guild_label = source_guild_obj.name if source_guild_obj else "your community"
-                elif len(linked_source_ids) > 1:
-                    # Multiple linked communities: use generalized wording
-                    guild_label = "any linked community"
-                else:
-                    # No linked sources (local support server): generic wording
-                    guild_label = "this community"
-            else:
-                # User DM'd from source/community guild: reference it directly
-                guild_label = source_guild.name
-
-            await message.channel.send(
-                embed=message_style.relay_embed(
-                    title="Open a Ticket",
-                    description=(
-                        f"You don't have an open ticket in **{guild_label}**.\n\n"
-                        f"Available categories:\n{cat_list}\n\n"
-                        "Please use the ticket panel in the server to select a category,\n"
-                        "or reply with just the category name to open a ticket."
-                    ),
-                )
-            )
-            return
-        else:
-            # No categories — create ticket directly
-            result = await ticket_service.open_ticket(
-                target_guild,
-                message.author,
-                bot=self.bot,
-                source_guild=source_guild if source_guild_id else None,
-            )
-            if result is None or isinstance(result, str):
-                block_msg = result or "You already have an open ticket."
-                await message.channel.send(
-                    embed=message_style.warning_embed(block_msg)
-                )
-            else:
-                ticket_id, channel = result
-                new_ticket = await ticket_service.get_active_ticket_for_user(
-                    self.bot, message.author.id,
-                )
-                if new_ticket:
-                    await relay_service.relay_user_to_staff(self.bot, message)
 
     # ── Inactivity Loop ──────────────────────────────
 

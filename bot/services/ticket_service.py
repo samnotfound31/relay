@@ -167,6 +167,51 @@ async def open_ticket(
         )
         return PREFLIGHT_FAILURE_MESSAGE
 
+    # DM PREFLIGHT VALIDATION
+    # Relay's architecture fundamentally depends on DM communication
+    # Validate that the user can receive DMs before creating any infrastructure
+    log.info(
+        "[DM_PREFLIGHT] Testing DM availability for user %s in guild %s",
+        user.id, target_guild.id
+    )
+    try:
+        # Send a minimal test DM to verify DM availability
+        # We use a simple text message to minimize overhead
+        await user.send("🔔")
+        log.info(
+            "[DM_PREFLIGHT_SUCCESS] User %s can receive DMs in guild %s",
+            user.id, target_guild.id
+        )
+    except discord.Forbidden as e:
+        log.error(
+            "[DM_PREFLIGHT_FAILED] User %s has DMs disabled for guild %s: %s",
+            user.id, target_guild.id, e, exc_info=True
+        )
+        return (
+            "Relay could not start the ticket session because your DMs are disabled for this server.\n\n"
+            "Please enable:\n"
+            "Server Settings → Privacy Settings → Allow Direct Messages\n\n"
+            "Then try opening the ticket again."
+        )
+    except discord.HTTPException as e:
+        log.error(
+            "[DM_PREFLIGHT_FAILED] HTTP error when testing DM for user %s in guild %s: %s",
+            user.id, target_guild.id, e, exc_info=True
+        )
+        return (
+            "Relay could not start the ticket session due to a communication error.\n\n"
+            "Please try again later."
+        )
+    except Exception as e:
+        log.error(
+            "[DM_PREFLIGHT_FAILED] Unexpected error when testing DM for user %s in guild %s: %s",
+            user.id, target_guild.id, e, exc_info=True
+        )
+        return (
+            "Relay could not start the ticket session due to an unexpected error.\n\n"
+            "Please try again later."
+        )
+
     # Community uniqueness: one open ticket per source guild (persists after /leave)
     community_guild_id = source_guild_id or guild.id
     try:

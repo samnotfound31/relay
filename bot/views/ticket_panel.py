@@ -10,7 +10,7 @@ import logging
 
 import discord
 from bot.database import queries
-from bot.services import ticket_service, message_style
+from bot.services import ticket_service, message_style, permission_audit
 from bot.views.category_select import CategorySelectView
 
 log = logging.getLogger(__name__)
@@ -91,21 +91,15 @@ class OpenTicketButton(discord.ui.Button):
                 )
                 if result is None or isinstance(result, str):
                     block_msg = result or "You already have an open ticket."
-                    
-                    # Check if this is a permission error
-                    if isinstance(result, str) and result.startswith("FORBIDDEN:"):
-                        log.warning("Permission error for user %s in guild %s: %s", interaction.user.id, target_guild.id, result)
-                        await interaction.followup.send(
-                            embed=message_style.error_embed(
-                                "Relay is missing required permissions to create ticket channels. Please ensure the bot has Manage Channels permission."
-                            ),
-                            ephemeral=True,
-                        )
-                    else:
-                        await interaction.followup.send(
-                            embed=message_style.warning_embed(block_msg),
-                            ephemeral=True,
-                        )
+                    embed = (
+                        message_style.error_embed(block_msg)
+                        if block_msg.startswith("Relay is missing the following required permissions:")
+                        else message_style.warning_embed(block_msg)
+                    )
+                    await interaction.followup.send(
+                        embed=embed,
+                        ephemeral=True,
+                    )
                 else:
                     ticket_id, _ = result
                     log.info("Ticket %s created successfully for user %s", ticket_id, interaction.user.id)
@@ -117,20 +111,26 @@ class OpenTicketButton(discord.ui.Button):
                     )
         except discord.Forbidden as e:
             log.error("Forbidden error in OpenTicketButton callback for user %s: %s", interaction.user.id, e, exc_info=True)
+            audit = permission_audit.audit_permissions(
+                interaction.guild,
+                "ticket_workflow",
+                context="ticket_panel_forbidden",
+            ) if interaction.guild else None
+            embed = (
+                permission_audit.missing_permissions_embed(audit)
+                if audit
+                else message_style.error_embed("Relay is missing required permissions.")
+            )
             # Try to send an error response if we haven't already responded
             try:
                 if not interaction.response.is_done():
                     await interaction.response.send_message(
-                        embed=message_style.error_embed(
-                            "Relay is missing required permissions to create ticket channels. Please ensure the bot has Manage Channels permission."
-                        ),
+                        embed=embed,
                         ephemeral=True,
                     )
                 else:
                     await interaction.followup.send(
-                        embed=message_style.error_embed(
-                            "Relay is missing required permissions to create ticket channels. Please ensure the bot has Manage Channels permission."
-                        ),
+                        embed=embed,
                         ephemeral=True,
                     )
             except Exception:

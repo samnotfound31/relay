@@ -19,7 +19,7 @@ import discord
 from bot.config import STATUS_EMOJIS
 from bot.database import queries
 from bot.services.emoji_service import get_emoji_for_staff
-from bot.services import rename_governance
+from bot.services import permission_audit, rename_governance
 
 log = logging.getLogger("relay.workflow")
 
@@ -310,10 +310,34 @@ async def _get_or_create_transcript_log_channel(
     guild: discord.Guild,
 ) -> discord.TextChannel | None:
     """Return the configured transcript log channel, or auto-create one."""
+    audit = permission_audit.audit_permissions(
+        guild,
+        "transcript_logging",
+        context="transcript_log_channel_init",
+    )
+    if not audit.ok:
+        log.error(
+            "[TRANSCRIPT_LOG_PERMISSIONS] Cannot initialize transcript logging in guild %s missing=%s",
+            guild.id, audit.missing_labels,
+        )
+        return None
+
     settings = await queries.get_transcript_settings(guild.id)
     if settings and settings.get("log_channel_id"):
         ch = guild.get_channel(settings["log_channel_id"])
         if isinstance(ch, discord.TextChannel):
+            audit = permission_audit.audit_permissions(
+                guild,
+                "transcript_logging",
+                channel=ch,
+                context="transcript_log_channel_existing",
+            )
+            if not audit.ok:
+                log.error(
+                    "[TRANSCRIPT_LOG_PERMISSIONS] Existing transcript channel %s missing=%s",
+                    ch.id, audit.missing_labels,
+                )
+                return None
             return ch
 
     # Auto-create relay-transcripts channel
@@ -336,7 +360,16 @@ async def _get_or_create_transcript_log_channel(
             overwrites=overwrites,
             reason="Relay auto-created transcript log channel",
         )
-    except discord.Forbidden:
+    except discord.Forbidden as e:
+        audit = permission_audit.audit_permissions(
+            guild,
+            "transcript_logging",
+            context="transcript_log_channel_forbidden",
+        )
+        log.error(
+            "[TRANSCRIPT_LOG_PERMISSIONS] Forbidden creating transcript channel in guild %s: %s missing=%s",
+            guild.id, e, audit.missing_labels,
+        )
         return None
 
     await queries.set_transcript_log_channel(guild.id, channel.id)
@@ -429,8 +462,19 @@ async def close_ticket(
     # Delete the channel
     try:
         await channel.delete(reason=f"Ticket #{ticket['id']} closed by {closed_by}")
-    except (discord.Forbidden, discord.HTTPException, discord.NotFound):
-        pass
+    except discord.Forbidden as e:
+        audit = permission_audit.audit_permissions(
+            guild,
+            "category_management",
+            channel=channel,
+            context="close_ticket_delete_forbidden",
+        )
+        log.error(
+            "[PERMISSION_ERROR] Cannot delete ticket channel %s: %s missing=%s",
+            channel.id, e, audit.missing_labels,
+        )
+    except (discord.HTTPException, discord.NotFound) as e:
+        log.warning("Failed to delete ticket channel %s: %s", channel.id, e)
 
     return True, ticket
 

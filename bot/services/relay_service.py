@@ -12,6 +12,7 @@ import logging
 
 import discord
 from bot.database import queries
+from bot.services import permission_audit
 from bot.services.permission_service import resolve_staff_role_label
 
 log = logging.getLogger(__name__)
@@ -79,6 +80,21 @@ async def relay_user_to_staff(
             )
             return False
 
+    guild = getattr(channel, "guild", None)
+    if guild is not None:
+        audit = permission_audit.audit_permissions(
+            guild,
+            "relay_channel",
+            channel=channel,
+            context="relay_user_to_staff",
+        )
+        if not audit.ok:
+            log.error(
+                "[DM_RELAY_USER] Permission audit failed for channel %s ticket %s missing=%s",
+                channel.id, ticket["id"], audit.missing_labels,
+            )
+            return False
+
     # Build plain text message
     username = message.author.name
     content = message.content or ""
@@ -101,9 +117,17 @@ async def relay_user_to_staff(
         )
         return True
     except discord.Forbidden as e:
+        audit = None
+        if guild is not None:
+            audit = permission_audit.audit_permissions(
+                guild,
+                "relay_channel",
+                channel=channel,
+                context="relay_user_to_staff_send_forbidden",
+            )
         log.error(
-            "[DM_RELAY_USER] Forbidden when sending to channel %s (ticket %s): %s - missing Send Messages permission",
-            channel.id, ticket["id"], e
+            "[DM_RELAY_USER] Forbidden when sending to channel %s (ticket %s): %s missing=%s",
+            channel.id, ticket["id"], e, audit.missing_labels if audit else []
         )
         return False
     except discord.HTTPException as e:
@@ -222,6 +246,20 @@ async def relay_staff_to_user(
     # Post confirmation in staff channel (same plain format)
     staff_channel = bot.get_channel(channel_id)
     if staff_channel:
+        guild = getattr(staff_channel, "guild", None)
+        if guild is not None:
+            audit = permission_audit.audit_permissions(
+                guild,
+                "relay_channel",
+                channel=staff_channel,
+                context="relay_staff_to_user_confirmation",
+            )
+            if not audit.ok:
+                log.error(
+                    "[DM_RELAY_STAFF] Permission audit failed for confirmation channel %s ticket %s missing=%s",
+                    channel_id, ticket["id"], audit.missing_labels,
+                )
+                return True
         prefix = "📨 *Anonymous reply sent*" if anonymous else "📨 *Reply sent*"
         confirm_parts = [prefix, "", header, content]
         if attachment_text:

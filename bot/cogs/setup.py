@@ -16,7 +16,7 @@ from discord.ext import commands
 
 from bot.config import RELAY_COLOR
 from bot.database import queries
-from bot.services import guild_mode, message_style
+from bot.services import guild_mode, message_style, permission_audit
 from bot.services.permission_service import build_category_overwrites
 from bot.views.ticket_panel import TicketPanelView
 from bot.views.staff_perms import RELAY_CAPABILITIES, StaffPermsView, _CapabilityToggle
@@ -93,6 +93,19 @@ class Setup(commands.Cog):
             len(categories) if categories else 0
         )
 
+        audit = permission_audit.audit_permissions(
+            guild,
+            "panel_posting",
+            channel=channel,
+            context="setup_announce",
+        )
+        if not audit.ok:
+            await interaction.followup.send(
+                embed=permission_audit.missing_permissions_embed(audit),
+                ephemeral=True,
+            )
+            return
+
         embed = message_style.ticket_panel_embed(
             guild.name,
             banner_url=banner,
@@ -108,15 +121,18 @@ class Setup(commands.Cog):
                 channel.id, msg.id
             )
         except discord.Forbidden as e:
+            audit = permission_audit.audit_permissions(
+                guild,
+                "panel_posting",
+                channel=channel,
+                context="setup_announce_forbidden",
+            )
             log.error(
-                "[PERMISSION_ERROR] Cannot send panel to channel %s (missing Send Messages): %s",
+                "[PERMISSION_ERROR] Cannot send panel to channel %s: %s",
                 channel.id, e
             )
             await interaction.followup.send(
-                embed=message_style.error_embed(
-                    "Relay cannot post the panel because it is missing the **Send Messages** permission in that channel.\n\n"
-                    "Please grant this permission in channel settings."
-                ),
+                embed=permission_audit.missing_permissions_embed(audit),
                 ephemeral=True,
             )
             return
@@ -205,6 +221,18 @@ class Setup(commands.Cog):
             )
             return
 
+        audit = permission_audit.audit_permissions(
+            guild,
+            "category_management",
+            context="setup_category_add",
+        )
+        if not audit.ok:
+            await interaction.followup.send(
+                embed=permission_audit.missing_permissions_embed(audit),
+                ephemeral=True,
+            )
+            return
+
         # Create Discord channel category with proper permissions
         try:
             overwrites = await build_category_overwrites(guild)
@@ -231,15 +259,17 @@ class Setup(commands.Cog):
                 display_name, discord_category.id
             )
         except discord.Forbidden as e:
+            audit = permission_audit.audit_permissions(
+                guild,
+                "category_management",
+                context="setup_category_add_forbidden",
+            )
             log.error(
-                "[PERMISSION_ERROR] Bot lacks Manage Channels permission in guild %s: %s",
+                "[PERMISSION_ERROR] Cannot create category in guild %s: %s",
                 guild.id, e
             )
             await interaction.followup.send(
-                embed=message_style.error_embed(
-                    "Relay cannot create categories because it is missing the **Manage Channels** permission.\n\n"
-                    "Please grant this permission in server settings."
-                ),
+                embed=permission_audit.missing_permissions_embed(audit),
                 ephemeral=True,
             )
             return
@@ -332,6 +362,18 @@ class Setup(commands.Cog):
             )
             return
 
+        audit = permission_audit.audit_permissions(
+            guild,
+            "category_management",
+            context="setup_category_remove",
+        )
+        if not audit.ok:
+            await interaction.response.send_message(
+                embed=permission_audit.missing_permissions_embed(audit),
+                ephemeral=True,
+            )
+            return
+
         # Get the category data before removing (to clean up Discord category)
         cat_data = await queries.get_category_by_name(guild.id, name)
 
@@ -352,10 +394,21 @@ class Setup(commands.Cog):
                             dc_cat.id
                         )
                     except discord.Forbidden as e:
+                        audit = permission_audit.audit_permissions(
+                            guild,
+                            "category_management",
+                            channel=dc_cat,
+                            context="setup_category_remove_forbidden",
+                        )
                         log.warning(
-                            "[PERMISSION_ERROR] Cannot delete Discord category %s (missing Manage Channels): %s",
+                            "[PERMISSION_ERROR] Cannot delete Discord category %s: %s",
                             dc_cat.id, e
                         )
+                        await interaction.response.send_message(
+                            embed=permission_audit.missing_permissions_embed(audit),
+                            ephemeral=True,
+                        )
+                        return
                     except Exception as e:
                         log.warning(
                             "[SETUP_CATEGORY_REMOVE] Failed to delete Discord category %s: %s",
@@ -418,6 +471,18 @@ class Setup(commands.Cog):
             log.warning(
                 "[SETUP_STAFFROLES] Guild mode check failed for guild %s",
                 guild.id
+            )
+            return
+
+        audit = permission_audit.audit_permissions(
+            guild,
+            "staff_role_sync",
+            context="setup_staffroles",
+        )
+        if not audit.ok:
+            await interaction.followup.send(
+                embed=permission_audit.missing_permissions_embed(audit),
+                ephemeral=True,
             )
             return
 
@@ -498,9 +563,15 @@ class Setup(commands.Cog):
                     dc_id
                 )
             except discord.Forbidden as e:
+                audit = permission_audit.audit_permissions(
+                    guild,
+                    "staff_role_sync",
+                    channel=dc_cat,
+                    context="setup_staffroles_category_forbidden",
+                )
                 log.error(
-                    "[PERMISSION_ERROR] Cannot update category %s permissions (missing Manage Channels): %s",
-                    dc_id, e
+                    "[PERMISSION_ERROR] Cannot update category %s permissions: %s missing=%s",
+                    dc_id, e, audit.missing_labels,
                 )
             except discord.HTTPException as e:
                 log.error(
@@ -526,9 +597,15 @@ class Setup(commands.Cog):
                         settings["ticket_category_id"]
                     )
                 except discord.Forbidden as e:
+                    audit = permission_audit.audit_permissions(
+                        guild,
+                        "staff_role_sync",
+                        channel=fallback,
+                        context="setup_staffroles_fallback_forbidden",
+                    )
                     log.error(
-                        "[PERMISSION_ERROR] Cannot update fallback category permissions (missing Manage Channels): %s",
-                        e
+                        "[PERMISSION_ERROR] Cannot update fallback category permissions: %s missing=%s",
+                        e, audit.missing_labels,
                     )
                 except Exception as e:
                     log.error(

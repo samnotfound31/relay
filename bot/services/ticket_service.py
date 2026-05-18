@@ -6,11 +6,15 @@ Phase 3: cross-server routing — tickets may be created in a linked support gui
 
 from __future__ import annotations
 
+import logging
 import re
+
 import discord
 from bot.database import queries
 from bot.services.permission_service import build_category_overwrites
 from bot.services import message_style
+
+log = logging.getLogger(__name__)
 
 
 def _sanitize_username(name: str) -> str:
@@ -27,6 +31,10 @@ async def _get_or_create_discord_category(
     Find or create the Discord channel category for a ticket category.
     Each ticket category gets its own Discord category.
     Falls back to a general 'Relay Tickets' category if no category specified.
+    
+    Raises:
+        discord.Forbidden: If bot lacks Manage Channels permission
+        discord.HTTPException: If category creation fails
     """
     if category_name:
         # Look up the ticket category in DB
@@ -34,14 +42,17 @@ async def _get_or_create_discord_category(
         if cat_data and cat_data.get("discord_category_id"):
             existing = guild.get_channel(cat_data["discord_category_id"])
             if existing:
+                log.info("Using existing category %s for category %s in guild %s", existing.id, category_name, guild.id)
                 return existing  # type: ignore
 
         # Create with emoji prefix
         emoji = (cat_data.get("emoji") if cat_data else None) or "📂"
         display_name = f"{emoji} {category_name}"
 
+        log.info("Creating category %s in guild %s", display_name, guild.id)
         overwrites = await build_category_overwrites(guild)
         category = await guild.create_category(display_name, overwrites=overwrites)
+        log.info("Successfully created category %s (ID: %s) in guild %s", display_name, category.id, guild.id)
 
         if cat_data:
             await queries.update_category_discord_id(
@@ -54,10 +65,13 @@ async def _get_or_create_discord_category(
         if settings and settings.get("ticket_category_id"):
             existing = guild.get_channel(settings["ticket_category_id"])
             if existing:
+                log.info("Using existing fallback category %s in guild %s", existing.id, guild.id)
                 return existing  # type: ignore
 
+        log.info("Creating fallback 'Relay Tickets' category in guild %s", guild.id)
         overwrites = await build_category_overwrites(guild)
         category = await guild.create_category("Relay Tickets", overwrites=overwrites)
+        log.info("Successfully created fallback category %s (ID: %s) in guild %s", category.name, category.id, guild.id)
         await queries.upsert_guild_settings(guild.id, ticket_category_id=category.id)
         return category
 
@@ -118,83 +132,157 @@ async def open_ticket(
 
     Phase 3: If source_guild is provided and linked, the ticket channel is
     created in the support guild. source_guild tracks where the user came from.
+    
+    This function now includes comprehensive exception handling to prevent
+    silent failures when the bot lacks permissions.
     """
+    log.info(
+        "Ticket creation started for user %s (%s) in guild %s, category: %s",
+        user.name, user.id, guild.id, category_name or "default"
+    )
+    
     # Determine target guild for channel creation
     target_guild = guild
     source_guild_id = None
 
-    if bot and source_guild:
-        target_guild, source_guild_id = await resolve_target_guild(source_guild, bot)
-    elif bot:
-        # Auto-resolve: if guild is linked, route to support
-        target_guild, source_guild_id = await resolve_target_guild(guild, bot)
+    try:
+        if bot and source_guild:
+            target_guild, source_guild_id = await resolve_target_guild(source_guild, bot)
+        elif bot:
+            # Auto-resolve: if guild is linked, route to support
+            target_guild, source_guild_id = await resolve_target_guild(guild, bot)
+        
+        log.info("Target guild resolved to %s (source_guild_id: %s)", target_guild.id, source_guild_id)
+    except Exception as e:
+        log.error("Failed to resolve target guild: %s", e, exc_info=True)
+        return "Failed to resolve target server for ticket creation."
 
     # Community uniqueness: one open ticket per source guild (persists after /leave)
     community_guild_id = source_guild_id or guild.id
-    existing_community = await queries.get_open_ticket_by_user_and_source_guild(
-        user.id, community_guild_id,
-    )
-    if existing_community:
-        if bot:
-            channel = bot.get_channel(existing_community["channel_id"])
-            if channel is None:
-                await queries.close_stale_ticket(existing_community["id"])
+    try:
+        existing_community = await queries.get_open_ticket_by_user_and_source_guild(
+            user.id, community_guild_id,
+        )
+        if existing_community:
+            if bot:
+                channel = bot.get_channel(existing_community["channel_id"])
+                if channel is None:
+                    await queries.close_stale_ticket(existing_community["id"])
+                else:
+                    log.info("Ticket creation blocked: user %s has existing ticket %s in community %s", user.id, existing_community["id"], community_guild_id)
+                    return (
+                        "You already have an existing ticket open in this community.\n"
+                        "Please wait for staff to close it before opening another."
+                    )
             else:
                 return (
                     "You already have an existing ticket open in this community.\n"
                     "Please wait for staff to close it before opening another."
                 )
-        else:
-            return (
-                "You already have an existing ticket open in this community.\n"
-                "Please wait for staff to close it before opening another."
-            )
+    except Exception as e:
+        log.error("Failed to check existing tickets: %s", e, exc_info=True)
+        return "Failed to check for existing tickets. Please try again."
 
     # Global relay session lock: one active DM session globally
     if bot:
-        existing_session = await get_active_ticket_for_user(bot, user.id)
-        if existing_session:
-            return "You already have an active Relay session in another community."
+        try:
+            existing_session = await get_active_ticket_for_user(bot, user.id)
+            if existing_session:
+                log.info("Ticket creation blocked: user %s has active relay session in ticket %s", user.id, existing_session["id"])
+                return "You already have an active Relay session in another community."
+        except Exception as e:
+            log.error("Failed to check active relay session: %s", e, exc_info=True)
+            return "Failed to check for active sessions. Please try again."
 
-    discord_category = await _get_or_create_discord_category(target_guild, category_name)
+    # Category creation - this is where permission errors typically occur
+    discord_category = None
+    try:
+        discord_category = await _get_or_create_discord_category(target_guild, category_name)
+    except discord.Forbidden as e:
+        log.error(
+            "Permission denied when creating category in guild %s: %s. Bot lacks Manage Channels permission.",
+            target_guild.id, e
+        )
+        return "FORBIDDEN: Relay is missing required permissions to create ticket channels. Please ensure the bot has Manage Channels permission."
+    except discord.HTTPException as e:
+        log.error("HTTP error when creating category in guild %s: %s", target_guild.id, e, exc_info=True)
+        return "Failed to create ticket category due to a Discord API error. Please try again."
+    except Exception as e:
+        log.error("Unexpected error when creating category in guild %s: %s", target_guild.id, e, exc_info=True)
+        return "Failed to create ticket category. Please try again."
 
-    # Channel name: just the username
-    channel_name = _sanitize_username(user.name)
+    # Channel creation
+    channel = None
+    try:
+        # Channel name: just the username
+        channel_name = _sanitize_username(user.name)
 
-    # Channel inherits permissions from the category
-    channel = await target_guild.create_text_channel(
-        name=channel_name,
-        category=discord_category,
-        topic=f"Relay ticket for {user} ({user.id})",
-    )
+        # Channel inherits permissions from the category
+        log.info("Creating channel %s in category %s in guild %s", channel_name, discord_category.id, target_guild.id)
+        channel = await target_guild.create_text_channel(
+            name=channel_name,
+            category=discord_category,
+            topic=f"Relay ticket for {user} ({user.id})",
+        )
+        log.info("Successfully created channel %s (ID: %s) in guild %s", channel_name, channel.id, target_guild.id)
+    except discord.Forbidden as e:
+        log.error(
+            "Permission denied when creating channel in guild %s: %s. Bot lacks Manage Channels permission.",
+            target_guild.id, e
+        )
+        return "FORBIDDEN: Relay is missing required permissions to create ticket channels. Please ensure the bot has Manage Channels permission."
+    except discord.HTTPException as e:
+        log.error("HTTP error when creating channel in guild %s: %s", target_guild.id, e, exc_info=True)
+        return "Failed to create ticket channel due to a Discord API error. Please try again."
+    except Exception as e:
+        log.error("Unexpected error when creating channel in guild %s: %s", target_guild.id, e, exc_info=True)
+        return "Failed to create ticket channel. Please try again."
 
-    ticket = await queries.create_ticket(
-        guild_id=target_guild.id,
-        user_id=user.id,
-        channel_id=channel.id,
-        category_name=category_name,
-        source_guild_id=source_guild_id,
-    )
-    ticket_id = ticket["id"]
-    display_ticket_number = ticket["community_ticket_number"]
+    # Database record creation
+    ticket = None
+    try:
+        ticket = await queries.create_ticket(
+            guild_id=target_guild.id,
+            user_id=user.id,
+            channel_id=channel.id,
+            category_name=category_name,
+            source_guild_id=source_guild_id,
+        )
+        ticket_id = ticket["id"]
+        display_ticket_number = ticket["community_ticket_number"]
+        log.info("Created ticket record %s (display #%s) for user %s in guild %s", ticket_id, display_ticket_number, user.id, target_guild.id)
+    except Exception as e:
+        log.error("Failed to create ticket record in database: %s", e, exc_info=True)
+        # Clean up the channel we created since database record failed
+        try:
+            await channel.delete()
+            log.info("Cleaned up orphaned channel %s after database failure", channel.id)
+        except Exception:
+            pass
+        return "Failed to create ticket record. Please try again."
 
     # Post opening header in staff channel
     # Include source guild identity if cross-server
-    if source_guild_id and source_guild:
-        source_name = source_guild.name
-        header = f"🌐 Source: **{source_name}**\n🎫 Ticket `#{display_ticket_number}`"
-        if category_name:
-            header += f"\n📂 Category: **{category_name}**"
-        await channel.send(header)
+    try:
+        if source_guild_id and source_guild:
+            source_name = source_guild.name
+            header = f"🌐 Source: **{source_name}**\n🎫 Ticket `#{display_ticket_number}`"
+            if category_name:
+                header += f"\n📂 Category: **{category_name}**"
+            await channel.send(header)
 
-    embed = message_style.ticket_created_staff_embed(
-        display_ticket_number, user, category_name,
-    )
-    # Attach pre-claim dashboard (lightweight, only Claim button)
-    # Transforms to full operational dashboard after claim
-    from bot.views.dashboard import PreClaimView
-    dashboard = PreClaimView()
-    await channel.send(embed=embed, view=dashboard)
+        embed = message_style.ticket_created_staff_embed(
+            display_ticket_number, user, category_name,
+        )
+        # Attach pre-claim dashboard (lightweight, only Claim button)
+        # Transforms to full operational dashboard after claim
+        from bot.views.dashboard import PreClaimView
+        dashboard = PreClaimView()
+        await channel.send(embed=embed, view=dashboard)
+        log.info("Successfully sent staff embed to channel %s", channel.id)
+    except Exception as e:
+        log.error("Failed to send staff embed to channel %s: %s", channel.id, e, exc_info=True)
+        # Don't fail the entire ticket creation if embed fails
 
     # DM the user
     try:
@@ -206,6 +294,7 @@ async def open_ticket(
             display_ticket_number, display_guild_name, guild_icon_url,
         )
         await user.send(embed=dm_embed)
+        log.info("Successfully sent DM to user %s for ticket %s", user.id, ticket_id)
 
         # /leave warning tip — sent every ticket open
         leave_warning = message_style.relay_embed(
@@ -222,10 +311,15 @@ async def open_ticket(
         )
         await user.send(embed=leave_warning)
     except discord.Forbidden:
+        log.warning("Could not DM user %s - DMs may be closed", user.id)
         await channel.send(
             embed=message_style.warning_embed(
                 "Could not DM this user — their DMs may be closed."
             )
         )
+    except Exception as e:
+        log.error("Unexpected error when sending DM to user %s: %s", user.id, e, exc_info=True)
+        # Don't fail the entire ticket creation if DM fails
 
+    log.info("Ticket creation completed successfully for user %s, ticket %s", user.id, ticket_id)
     return display_ticket_number, channel

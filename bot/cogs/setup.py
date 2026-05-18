@@ -21,6 +21,8 @@ from bot.services.permission_service import build_category_overwrites
 from bot.views.ticket_panel import TicketPanelView
 from bot.views.staff_perms import RELAY_CAPABILITIES, StaffPermsView, _CapabilityToggle
 
+log = logging.getLogger(__name__)
+
 
 class Setup(commands.Cog):
     """Server setup commands for Relay."""
@@ -47,8 +49,14 @@ class Setup(commands.Cog):
         banner: str | None = None,
         colour: str | None = None,
     ) -> None:
+        log.info(
+            "[SETUP_ANNOUNCE] User %s (%s) posting panel in channel %s of guild %s",
+            interaction.user.id, interaction.user.name, channel.id, interaction.guild_id
+        )
+        
         guild = interaction.guild
         if guild is None:
+            log.warning("[SETUP_ANNOUNCE] Guild is None")
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -65,6 +73,10 @@ class Setup(commands.Cog):
                 # Convert to integer
                 embed_color = int(hex_str, 16)
             except ValueError:
+                log.warning(
+                    "[SETUP_ANNOUNCE] Invalid color format: %s",
+                    colour
+                )
                 await interaction.followup.send(
                     embed=message_style.warning_embed(
                         "Invalid color format.\n"
@@ -76,6 +88,10 @@ class Setup(commands.Cog):
 
         # Fetch categories so the panel displays them dynamically
         categories = await queries.get_categories(guild.id)
+        log.debug(
+            "[SETUP_ANNOUNCE] Fetched %d categories for panel",
+            len(categories) if categories else 0
+        )
 
         embed = message_style.ticket_panel_embed(
             guild.name,
@@ -84,13 +100,60 @@ class Setup(commands.Cog):
             color=embed_color,
         )
         view = TicketPanelView()
-        msg = await channel.send(embed=embed, view=view)
+        
+        try:
+            msg = await channel.send(embed=embed, view=view)
+            log.info(
+                "[SETUP_ANNOUNCE] Panel posted in channel %s (message %s)",
+                channel.id, msg.id
+            )
+        except discord.Forbidden as e:
+            log.error(
+                "[PERMISSION_ERROR] Cannot send panel to channel %s (missing Send Messages): %s",
+                channel.id, e
+            )
+            await interaction.followup.send(
+                embed=message_style.error_embed(
+                    "Relay cannot post the panel because it is missing the **Send Messages** permission in that channel.\n\n"
+                    "Please grant this permission in channel settings."
+                ),
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException as e:
+            log.error(
+                "[SETUP_ANNOUNCE] HTTP error posting panel: %s",
+                e, exc_info=True
+            )
+            await interaction.followup.send(
+                embed=message_style.error_embed(
+                    "Failed to post panel due to a Discord API error."
+                ),
+                ephemeral=True,
+            )
+            return
+        except Exception as e:
+            log.error(
+                "[SETUP_ANNOUNCE] Unexpected error posting panel: %s",
+                e, exc_info=True
+            )
+            await interaction.followup.send(
+                embed=message_style.error_embed(
+                    "An unexpected error occurred while posting the panel."
+                ),
+                ephemeral=True,
+            )
+            return
 
         await queries.upsert_guild_settings(
             guild.id,
             announce_channel_id=channel.id,
             announce_message_id=msg.id,
             banner_url=banner,
+        )
+        log.info(
+            "[SETUP_ANNOUNCE] Guild settings updated for panel in channel %s",
+            channel.id
         )
 
         await interaction.followup.send(
@@ -124,20 +187,86 @@ class Setup(commands.Cog):
         description: str,
         emoji: str = "📂",
     ) -> None:
+        log.info(
+            "[SETUP_CATEGORY_ADD] User %s (%s) adding category %s in guild %s",
+            interaction.user.id, interaction.user.name, name, interaction.guild_id
+        )
+        
         guild = interaction.guild
         if guild is None:
+            log.warning("[SETUP_CATEGORY_ADD] Guild is None")
             return
 
         await interaction.response.defer(ephemeral=True)
         if await guild_mode.require_not_source_deferred(interaction):
+            log.warning(
+                "[SETUP_CATEGORY_ADD] Guild mode check failed for guild %s",
+                guild.id
+            )
             return
 
         # Create Discord channel category with proper permissions
-        overwrites = await build_category_overwrites(guild)
+        try:
+            overwrites = await build_category_overwrites(guild)
+        except Exception as e:
+            log.error(
+                "[SETUP_CATEGORY_ADD] Failed to build category overwrites: %s",
+                e, exc_info=True
+            )
+            await interaction.followup.send(
+                embed=message_style.error_embed(
+                    "Failed to build category permissions. Check bot permissions."
+                ),
+                ephemeral=True,
+            )
+            return
+        
         display_name = f"{emoji} {name}"
-        discord_category = await guild.create_category(
-            display_name, overwrites=overwrites,
-        )
+        try:
+            discord_category = await guild.create_category(
+                display_name, overwrites=overwrites,
+            )
+            log.info(
+                "[SETUP_CATEGORY_ADD] Created Discord category %s (%s)",
+                display_name, discord_category.id
+            )
+        except discord.Forbidden as e:
+            log.error(
+                "[PERMISSION_ERROR] Bot lacks Manage Channels permission in guild %s: %s",
+                guild.id, e
+            )
+            await interaction.followup.send(
+                embed=message_style.error_embed(
+                    "Relay cannot create categories because it is missing the **Manage Channels** permission.\n\n"
+                    "Please grant this permission in server settings."
+                ),
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException as e:
+            log.error(
+                "[SETUP_CATEGORY_ADD] HTTP error creating category: %s",
+                e, exc_info=True
+            )
+            await interaction.followup.send(
+                embed=message_style.error_embed(
+                    "Failed to create category due to a Discord API error."
+                ),
+                ephemeral=True,
+            )
+            return
+        except Exception as e:
+            log.error(
+                "[SETUP_CATEGORY_ADD] Unexpected error creating category: %s",
+                e, exc_info=True
+            )
+            await interaction.followup.send(
+                embed=message_style.error_embed(
+                    "An unexpected error occurred while creating the category."
+                ),
+                ephemeral=True,
+            )
+            return
 
         # Store in DB with discord_category_id
         success = await queries.add_category(
@@ -145,6 +274,10 @@ class Setup(commands.Cog):
             discord_category_id=discord_category.id,
         )
         if success:
+            log.info(
+                "[SETUP_CATEGORY_ADD] Category %s stored in DB successfully",
+                name
+            )
             await interaction.followup.send(
                 embed=message_style.success_embed(
                     f"Category **{emoji} {name}** created.\n"
@@ -154,10 +287,17 @@ class Setup(commands.Cog):
             )
         else:
             # DB insert failed (duplicate) — clean up the Discord category
+            log.warning(
+                "[SETUP_CATEGORY_ADD] Category %s already exists in DB, cleaning up Discord category",
+                name
+            )
             try:
                 await discord_category.delete()
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning(
+                    "[SETUP_CATEGORY_ADD] Failed to clean up Discord category %s: %s",
+                    discord_category.id, e
+                )
             await interaction.followup.send(
                 embed=message_style.error_embed(
                     f"Category **{name}** already exists."
@@ -175,11 +315,21 @@ class Setup(commands.Cog):
         interaction: discord.Interaction,
         name: str,
     ) -> None:
+        log.info(
+            "[SETUP_CATEGORY_REMOVE] User %s (%s) removing category %s in guild %s",
+            interaction.user.id, interaction.user.name, name, interaction.guild_id
+        )
+        
         guild = interaction.guild
         if guild is None:
+            log.warning("[SETUP_CATEGORY_REMOVE] Guild is None")
             return
 
         if await guild_mode.require_not_source(interaction):
+            log.warning(
+                "[SETUP_CATEGORY_REMOVE] Guild mode check failed for guild %s",
+                guild.id
+            )
             return
 
         # Get the category data before removing (to clean up Discord category)
@@ -187,14 +337,30 @@ class Setup(commands.Cog):
 
         removed = await queries.remove_category(guild.id, name)
         if removed:
+            log.info(
+                "[SETUP_CATEGORY_REMOVE] Category %s removed from DB",
+                name
+            )
             # Optionally remove the Discord category if empty
             if cat_data and cat_data.get("discord_category_id"):
                 dc_cat = guild.get_channel(cat_data["discord_category_id"])
                 if dc_cat and not dc_cat.channels:  # type: ignore
                     try:
                         await dc_cat.delete(reason=f"Category '{name}' removed")
-                    except Exception:
-                        pass
+                        log.info(
+                            "[SETUP_CATEGORY_REMOVE] Deleted Discord category %s",
+                            dc_cat.id
+                        )
+                    except discord.Forbidden as e:
+                        log.warning(
+                            "[PERMISSION_ERROR] Cannot delete Discord category %s (missing Manage Channels): %s",
+                            dc_cat.id, e
+                        )
+                    except Exception as e:
+                        log.warning(
+                            "[SETUP_CATEGORY_REMOVE] Failed to delete Discord category %s: %s",
+                            dc_cat.id, e
+                        )
 
             await interaction.response.send_message(
                 embed=message_style.success_embed(
@@ -203,6 +369,10 @@ class Setup(commands.Cog):
                 ephemeral=True,
             )
         else:
+            log.warning(
+                "[SETUP_CATEGORY_REMOVE] Category %s not found in DB",
+                name
+            )
             await interaction.response.send_message(
                 embed=message_style.error_embed(
                     f"Category **{name}** not found."
@@ -233,17 +403,31 @@ class Setup(commands.Cog):
         action: app_commands.Choice[str],
         role: discord.Role,
     ) -> None:
+        log.info(
+            "[SETUP_STAFFROLES] User %s (%s) %s role %s in guild %s",
+            interaction.user.id, interaction.user.name, action.value, role.name, interaction.guild_id
+        )
+        
         guild = interaction.guild
         if guild is None:
+            log.warning("[SETUP_STAFFROLES] Guild is None")
             return
 
         await interaction.response.defer(ephemeral=True)
         if await guild_mode.require_not_source_deferred(interaction):
+            log.warning(
+                "[SETUP_STAFFROLES] Guild mode check failed for guild %s",
+                guild.id
+            )
             return
 
         if action.value == "add":
             success = await queries.add_support_role(guild.id, role.id)
             if not success:
+                log.info(
+                    "[SETUP_STAFFROLES] Role %s already a support role",
+                    role.id
+                )
                 await interaction.followup.send(
                     embed=message_style.warning_embed(
                         f"{role.mention} is already a support role."
@@ -251,10 +435,18 @@ class Setup(commands.Cog):
                     ephemeral=True,
                 )
                 return
+            log.info(
+                "[SETUP_STAFFROLES] Added role %s as support role",
+                role.id
+            )
             result_msg = f"{role.mention} added as a support role."
         else:
             removed = await queries.remove_support_role(guild.id, role.id)
             if not removed:
+                log.warning(
+                    "[SETUP_STAFFROLES] Role %s is not a support role",
+                    role.id
+                )
                 await interaction.followup.send(
                     embed=message_style.error_embed(
                         f"{role.mention} is not a support role."
@@ -262,11 +454,29 @@ class Setup(commands.Cog):
                     ephemeral=True,
                 )
                 return
+            log.info(
+                "[SETUP_STAFFROLES] Removed role %s from support roles",
+                role.id
+            )
             result_msg = f"{role.mention} removed from support roles."
 
         # ── Propagate to ALL existing Relay Discord categories ──
         categories = await queries.get_categories(guild.id)
-        new_overwrites = await build_category_overwrites(guild)
+        try:
+            new_overwrites = await build_category_overwrites(guild)
+        except Exception as e:
+            log.error(
+                "[SETUP_STAFFROLES] Failed to build category overwrites: %s",
+                e, exc_info=True
+            )
+            await interaction.followup.send(
+                embed=message_style.warning_embed(
+                    result_msg + "\n\nWarning: Failed to update category permissions."
+                ),
+                ephemeral=True,
+            )
+            return
+        
         updated = 0
 
         for cat in categories:
@@ -275,12 +485,33 @@ class Setup(commands.Cog):
                 continue
             dc_cat = guild.get_channel(dc_id)
             if dc_cat is None:
+                log.warning(
+                    "[SETUP_STAFFROLES] Cannot find Discord category %s",
+                    dc_id
+                )
                 continue
             try:
                 await dc_cat.edit(overwrites=new_overwrites)
                 updated += 1
-            except discord.HTTPException:
-                pass
+                log.debug(
+                    "[SETUP_STAFFROLES] Updated permissions for category %s",
+                    dc_id
+                )
+            except discord.Forbidden as e:
+                log.error(
+                    "[PERMISSION_ERROR] Cannot update category %s permissions (missing Manage Channels): %s",
+                    dc_id, e
+                )
+            except discord.HTTPException as e:
+                log.error(
+                    "[SETUP_STAFFROLES] HTTP error updating category %s: %s",
+                    dc_id, e
+                )
+            except Exception as e:
+                log.error(
+                    "[SETUP_STAFFROLES] Unexpected error updating category %s: %s",
+                    dc_id, e, exc_info=True
+                )
 
         # Also update the fallback category if it exists
         settings = await queries.get_guild_settings(guild.id)
@@ -290,10 +521,26 @@ class Setup(commands.Cog):
                 try:
                     await fallback.edit(overwrites=new_overwrites)
                     updated += 1
-                except discord.HTTPException:
-                    pass
+                    log.debug(
+                        "[SETUP_STAFFROLES] Updated fallback category %s",
+                        settings["ticket_category_id"]
+                    )
+                except discord.Forbidden as e:
+                    log.error(
+                        "[PERMISSION_ERROR] Cannot update fallback category permissions (missing Manage Channels): %s",
+                        e
+                    )
+                except Exception as e:
+                    log.error(
+                        "[SETUP_STAFFROLES] Error updating fallback category: %s",
+                        e, exc_info=True
+                    )
 
         suffix = f"\nUpdated {updated} existing category permissions." if updated else ""
+        log.info(
+            "[SETUP_STAFFROLES] Completed %s for role %s, updated %d categories",
+            action.value, role.id, updated
+        )
         await interaction.followup.send(
             embed=message_style.success_embed(result_msg + suffix),
             ephemeral=True,

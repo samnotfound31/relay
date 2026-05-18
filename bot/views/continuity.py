@@ -62,33 +62,49 @@ class _ContinuityTypeSelect(ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        log.info(
+            "[CONTINUITY_SELECT] User %s (%s) selecting continuity type %s for user %s",
+            interaction.user.id, interaction.user.name, self.values[0], self.user_id
+        )
+        
         try:
             selected = self.values[0]
             if selected == "notes":
+                log.info(
+                    "[CONTINUITY_NOTES] User %s viewing notes for user %s in guild %s",
+                    interaction.user.id, self.user_id, self.source_guild_id
+                )
                 await _send_notes_history(interaction, self.user_id, self.source_guild_id)
                 return
+            log.info(
+                "[CONTINUITY_TRANSCRIPTS] User %s viewing transcripts for user %s in guild %s",
+                interaction.user.id, self.user_id, self.source_guild_id
+            )
             await _send_transcript_history(interaction, self.user_id, self.source_guild_id)
         except discord.InteractionResponded:
-            log.warning("Dropdown interaction already responded")
+            log.warning("[CONTINUITY_SELECT] Interaction already responded for user %s", interaction.user.id)
             await interaction.followup.send(
                 embed=message_style.warning_embed(EXPIRED_VIEW),
                 ephemeral=True,
             )
         except discord.NotFound:
-            log.warning("Dropdown interaction: message or channel not found")
+            log.warning("[CONTINUITY_SELECT] Message or channel not found for user %s", interaction.user.id)
             await interaction.followup.send(
                 embed=message_style.warning_embed(EXPIRED_VIEW),
                 ephemeral=True,
             )
         except Exception as e:
-            log.warning(f"Dropdown callback failed: {e}")
+            log.error(
+                "[CONTINUITY_SELECT_ERROR] Unexpected error for user %s: %s",
+                interaction.user.id, e, exc_info=True
+            )
             try:
                 await interaction.followup.send(
                     embed=message_style.warning_embed(EXPIRED_VIEW),
                     ephemeral=True,
                 )
             except Exception:
-                pass
+                log.error("[CONTINUITY_SELECT] Failed to send error message to user %s", interaction.user.id)
 
 
 async def _send_notes_history(

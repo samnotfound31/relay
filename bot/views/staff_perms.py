@@ -96,24 +96,82 @@ class _CapabilityToggle(ui.Button):
             self.label = f"✓ {self.capability}"
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        # Toggle denial state
-        if self.capability in self.view_ref.denied_capabilities:
-            # Allow capability
-            await queries.allow_capability_for_role(
-                self.view_ref.guild_id,
-                self.view_ref.role_id,
-                self.capability,
-            )
-            self.view_ref.denied_capabilities.remove(self.capability)
-            self.update_state(False)
-        else:
-            # Deny capability
-            await queries.deny_capability_for_role(
-                self.view_ref.guild_id,
-                self.view_ref.role_id,
-                self.capability,
-            )
-            self.view_ref.denied_capabilities.add(self.capability)
-            self.update_state(True)
+        log.info(
+            "[STAFF_PERMS_TOGGLE] User %s (%s) toggling capability %s for role %s in guild %s",
+            interaction.user.id, interaction.user.name, self.capability, self.view_ref.role_id, self.view_ref.guild_id
+        )
+        
+        try:
+            # Toggle denial state
+            if self.capability in self.view_ref.denied_capabilities:
+                # Allow capability
+                log.info(
+                    "[STAFF_PERMS_ALLOW] Allowing capability %s for role %s",
+                    self.capability, self.view_ref.role_id
+                )
+                await queries.allow_capability_for_role(
+                    self.view_ref.guild_id,
+                    self.view_ref.role_id,
+                    self.capability,
+                )
+                self.view_ref.denied_capabilities.remove(self.capability)
+                self.update_state(False)
+            else:
+                # Deny capability
+                log.info(
+                    "[STAFF_PERMS_DENY] Denying capability %s for role %s",
+                    self.capability, self.view_ref.role_id
+                )
+                await queries.deny_capability_for_role(
+                    self.view_ref.guild_id,
+                    self.view_ref.role_id,
+                    self.capability,
+                )
+                self.view_ref.denied_capabilities.add(self.capability)
+                self.update_state(True)
 
-        await interaction.response.edit_message(view=self.view_ref)
+            await interaction.response.edit_message(view=self.view_ref)
+        except discord.Forbidden as e:
+            log.error(
+                "[PERMISSION_ERROR] Forbidden in StaffPerms toggle for user %s: %s",
+                interaction.user.id, e, exc_info=True
+            )
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(
+                        embed=message_style.error_embed(
+                            "Relay is missing required permissions to modify staff permissions."
+                        ),
+                        ephemeral=True,
+                    )
+                else:
+                    await interaction.followup.send(
+                        embed=message_style.error_embed(
+                            "Relay is missing required permissions to modify staff permissions."
+                        ),
+                        ephemeral=True,
+                    )
+            except Exception:
+                log.error("Failed to send error message after Forbidden exception")
+        except Exception as e:
+            log.error(
+                "[STAFF_PERMS_ERROR] Unexpected error in StaffPerms toggle for user %s: %s",
+                interaction.user.id, e, exc_info=True
+            )
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(
+                        embed=message_style.error_embed(
+                            "An unexpected error occurred. Please try again."
+                        ),
+                        ephemeral=True,
+                    )
+                else:
+                    await interaction.followup.send(
+                        embed=message_style.error_embed(
+                            "An unexpected error occurred. Please try again."
+                        ),
+                        ephemeral=True,
+                    )
+            except Exception:
+                log.error("Failed to send error message after unexpected exception")

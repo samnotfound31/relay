@@ -566,12 +566,29 @@ class _PreClaimButton(ui.Button):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        log.info(
+            "[DASHBOARD_PRECLAIM] User %s (%s) attempting to claim ticket in channel %s",
+            interaction.user.id, interaction.user.name, interaction.channel_id
+        )
+        
         if not await _staff_guard(interaction):
+            log.warning(
+                "[DASHBOARD_PRECLAIM] Staff guard failed for user %s in channel %s",
+                interaction.user.id, interaction.channel_id
+            )
             return
         if not await _require_capability(interaction, "claim"):
+            log.warning(
+                "[DASHBOARD_PRECLAIM] Capability check failed for user %s (claim)",
+                interaction.user.id
+            )
             return
         ticket = await _fresh_ticket(interaction)
         if ticket is None:
+            log.warning(
+                "[DASHBOARD_PRECLAIM] No ticket found in channel %s",
+                interaction.channel_id
+            )
             await interaction.response.send_message(
                 embed=message_style.warning_embed(NO_TICKET_MSG),
                 ephemeral=True,
@@ -585,6 +602,10 @@ class _PreClaimButton(ui.Button):
                 if interaction.guild else None
             )
             name = claimer.display_name if claimer else f"User {ticket['claimed_by']}"
+            log.info(
+                "[DASHBOARD_PRECLAIM] Ticket %s already claimed by %s in channel %s",
+                ticket["id"], name, interaction.channel_id
+            )
             await interaction.response.send_message(
                 embed=message_style.warning_embed(f"Already claimed by **{name}**."),
                 ephemeral=True,
@@ -594,6 +615,10 @@ class _PreClaimButton(ui.Button):
 
         channel = interaction.channel
         if not isinstance(channel, discord.TextChannel):
+            log.warning(
+                "[DASHBOARD_PRECLAIM] Invalid channel type in channel %s",
+                interaction.channel_id
+            )
             await interaction.response.send_message(
                 embed=message_style.warning_embed(NO_TICKET_MSG),
                 ephemeral=True,
@@ -605,9 +630,16 @@ class _PreClaimButton(ui.Button):
             channel, interaction.user, interaction.client,  # type: ignore[arg-type]
         )
         if success:
+            log.info(
+                "[DASHBOARD_CLAIM_SUCCESS] User %s claimed ticket %s in channel %s",
+                interaction.user.id, ticket["id"], channel.id
+            )
             await interaction.followup.send(embed=message_style.success_embed(msg))
-            log.info("Dashboard claim succeeded for channel %s", channel.id)
         else:
+            log.warning(
+                "[DASHBOARD_CLAIM_FAILED] Claim failed for user %s in channel %s: %s",
+                interaction.user.id, channel.id, msg
+            )
             await interaction.followup.send(
                 embed=message_style.warning_embed(msg),
                 ephemeral=True,
@@ -626,12 +658,29 @@ class _ClaimButton(ui.Button):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        log.info(
+            "[DASHBOARD_CLAIM] User %s (%s) attempting to claim ticket in channel %s",
+            interaction.user.id, interaction.user.name, interaction.channel_id
+        )
+        
         if not await _staff_guard(interaction):
+            log.warning(
+                "[DASHBOARD_CLAIM] Staff guard failed for user %s in channel %s",
+                interaction.user.id, interaction.channel_id
+            )
             return
         if not await _require_capability(interaction, "claim"):
+            log.warning(
+                "[DASHBOARD_CLAIM] Capability check failed for user %s (claim)",
+                interaction.user.id
+            )
             return
         ticket = await _fresh_ticket(interaction)
         if ticket is None:
+            log.warning(
+                "[DASHBOARD_CLAIM] No ticket found in channel %s",
+                interaction.channel_id
+            )
             await interaction.response.send_message(
                 embed=message_style.warning_embed(NO_TICKET_MSG),
                 ephemeral=True,
@@ -645,6 +694,10 @@ class _ClaimButton(ui.Button):
                 if interaction.guild else None
             )
             name = claimer.display_name if claimer else f"User {ticket['claimed_by']}"
+            log.info(
+                "[DASHBOARD_CLAIM] Ticket %s already claimed by %s in channel %s",
+                ticket["id"], name, interaction.channel_id
+            )
             await interaction.response.send_message(
                 embed=message_style.warning_embed(f"Already claimed by **{name}**."),
                 ephemeral=True,
@@ -654,6 +707,10 @@ class _ClaimButton(ui.Button):
 
         channel = interaction.channel
         if not isinstance(channel, discord.TextChannel):
+            log.warning(
+                "[DASHBOARD_CLAIM] Invalid channel type in channel %s",
+                interaction.channel_id
+            )
             await interaction.response.send_message(
                 embed=message_style.warning_embed(NO_TICKET_MSG),
                 ephemeral=True,
@@ -665,9 +722,16 @@ class _ClaimButton(ui.Button):
             channel, interaction.user, interaction.client,  # type: ignore[arg-type]
         )
         if success:
+            log.info(
+                "[DASHBOARD_CLAIM_SUCCESS] User %s claimed ticket %s in channel %s",
+                interaction.user.id, ticket["id"], channel.id
+            )
             await interaction.followup.send(embed=message_style.success_embed(msg))
-            log.info("Dashboard claim succeeded for channel %s", channel.id)
         else:
+            log.warning(
+                "[DASHBOARD_CLAIM_FAILED] Claim failed for user %s in channel %s: %s",
+                interaction.user.id, channel.id, msg
+            )
             await interaction.followup.send(
                 embed=message_style.warning_embed(msg),
                 ephemeral=True,
@@ -686,18 +750,39 @@ class _ChangeStatusButton(ui.Button):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        log.info(
+            "[DASHBOARD_STATUS] User %s (%s) opening status selector in channel %s",
+            interaction.user.id, interaction.user.name, interaction.channel_id
+        )
+        
         if not await _staff_guard(interaction):
+            log.warning(
+                "[DASHBOARD_STATUS] Staff guard failed for user %s in channel %s",
+                interaction.user.id, interaction.channel_id
+            )
             return
         if not await _require_capability(interaction, "status"):
+            log.warning(
+                "[DASHBOARD_STATUS] Capability check failed for user %s (status)",
+                interaction.user.id
+            )
             return
         ticket = await _fresh_ticket(interaction)
         if ticket is None:
+            log.warning(
+                "[DASHBOARD_STATUS] No ticket found in channel %s",
+                interaction.channel_id
+            )
             await interaction.response.send_message(
                 embed=message_style.warning_embed(NO_TICKET_MSG),
                 ephemeral=True,
             )
             return
         if not await _owner_guard(interaction, ticket):
+            log.warning(
+                "[DASHBOARD_STATUS] Owner guard failed for user %s on ticket %s",
+                interaction.user.id, ticket["id"]
+            )
             return
 
         # Open transient status selector (no preselection)
@@ -713,10 +798,19 @@ class _ChangeStatusButton(ui.Button):
         )
 
         async def status_callback(interaction: discord.Interaction) -> None:
+            log.info(
+                "[DASHBOARD_STATUS_CHANGE] User %s selected status %s for ticket in channel %s",
+                interaction.user.id, select.values[0], interaction.channel_id
+            )
+            
             if not await _staff_guard(interaction):
                 return
             ticket = await _fresh_ticket(interaction)
             if ticket is None:
+                log.warning(
+                    "[DASHBOARD_STATUS_CHANGE] No ticket found in channel %s",
+                    interaction.channel_id
+                )
                 await interaction.response.send_message(
                     embed=message_style.warning_embed(EXPIRED_VIEW),
                     ephemeral=True,
@@ -727,6 +821,10 @@ class _ChangeStatusButton(ui.Button):
 
             channel = interaction.channel
             if not isinstance(channel, discord.TextChannel):
+                log.warning(
+                    "[DASHBOARD_STATUS_CHANGE] Invalid channel type in channel %s",
+                    interaction.channel_id
+                )
                 await interaction.response.send_message(
                     embed=message_style.warning_embed(NO_TICKET_MSG),
                     ephemeral=True,
@@ -739,12 +837,16 @@ class _ChangeStatusButton(ui.Button):
                 channel, new_status, interaction.client,  # type: ignore[arg-type]
             )
             if success:
-                await interaction.followup.send(embed=message_style.success_embed(msg))
                 log.info(
-                    "Dashboard status change %s on channel %s",
-                    new_status, channel.id,
+                    "[DASHBOARD_STATUS_SUCCESS] Status changed to %s for ticket %s in channel %s",
+                    new_status, ticket["id"], channel.id
                 )
+                await interaction.followup.send(embed=message_style.success_embed(msg))
             else:
+                log.warning(
+                    "[DASHBOARD_STATUS_FAILED] Status change failed for ticket %s in channel %s: %s",
+                    ticket["id"], channel.id, msg
+                )
                 await interaction.followup.send(
                     embed=message_style.error_embed(msg),
                     ephemeral=True,
@@ -764,9 +866,9 @@ class _ChangeStatusButton(ui.Button):
                 ephemeral=True,
             )
         except discord.InteractionResponded:
-            log.warning("Status selector: interaction already responded")
+            log.warning("[DASHBOARD_STATUS] Interaction already responded")
         except _TRANSIENT_ERRORS as e:
-            log.warning("Status selector dispatch interrupted (transient): %s", e)
+            log.warning("[DASHBOARD_STATUS] Dispatch interrupted (transient): %s", e)
 
 
 class _ChangePriorityButton(ui.Button):
@@ -780,21 +882,43 @@ class _ChangePriorityButton(ui.Button):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        log.info(
+            "[DASHBOARD_PRIORITY] User %s (%s) opening priority selector in channel %s",
+            interaction.user.id, interaction.user.name, interaction.channel_id
+        )
+        
         if not await _staff_guard(interaction):
+            log.warning(
+                "[DASHBOARD_PRIORITY] Staff guard failed for user %s in channel %s",
+                interaction.user.id, interaction.channel_id
+            )
             return
         if not await _require_capability(interaction, "priority"):
+            log.warning(
+                "[DASHBOARD_PRIORITY] Capability check failed for user %s (priority)",
+                interaction.user.id
+            )
             return
         ticket = await _fresh_ticket(interaction)
         if ticket is None:
+            log.warning(
+                "[DASHBOARD_PRIORITY] No ticket found in channel %s",
+                interaction.channel_id
+            )
             await interaction.response.send_message(
                 embed=message_style.warning_embed(NO_TICKET_MSG),
                 ephemeral=True,
             )
             return
         if not await _owner_guard(interaction, ticket):
+            log.warning(
+                "[DASHBOARD_PRIORITY] Owner guard failed for user %s on ticket %s",
+                interaction.user.id, ticket["id"]
+            )
             return
 
         if interaction.channel_id is None:
+            log.warning("[DASHBOARD_PRIORITY] No channel_id in interaction")
             return
 
         # Open transient priority selector (no preselection)
@@ -810,10 +934,19 @@ class _ChangePriorityButton(ui.Button):
         )
 
         async def priority_callback(interaction: discord.Interaction) -> None:
+            log.info(
+                "[DASHBOARD_PRIORITY_CHANGE] User %s selected priority %s for ticket in channel %s",
+                interaction.user.id, select.values[0], interaction.channel_id
+            )
+            
             if not await _staff_guard(interaction):
                 return
             ticket = await _fresh_ticket(interaction)
             if ticket is None:
+                log.warning(
+                    "[DASHBOARD_PRIORITY_CHANGE] No ticket found in channel %s",
+                    interaction.channel_id
+                )
                 await interaction.response.send_message(
                     embed=message_style.warning_embed(EXPIRED_VIEW),
                     ephemeral=True,
@@ -823,18 +956,19 @@ class _ChangePriorityButton(ui.Button):
                 return
 
             if interaction.channel_id is None:
+                log.warning("[DASHBOARD_PRIORITY_CHANGE] No channel_id in interaction")
                 return
             level = select.values[0]
             await queries.update_ticket_priority(interaction.channel_id, level)
             emoji = PRIORITY_EMOJIS.get(level, "🟡")
+            log.info(
+                "[DASHBOARD_PRIORITY_SUCCESS] Priority set to %s for ticket in channel %s",
+                level, interaction.channel_id
+            )
             await interaction.response.send_message(
                 embed=message_style.success_embed(
                     f"{emoji} Priority set to **{level.title()}**."
                 ),
-            )
-            log.info(
-                "Dashboard priority change %s on channel %s",
-                level, interaction.channel_id,
             )
             await _refresh_attached_view(interaction)
 
@@ -851,9 +985,9 @@ class _ChangePriorityButton(ui.Button):
                 ephemeral=True,
             )
         except discord.InteractionResponded:
-            log.warning("Priority selector: interaction already responded")
+            log.warning("[DASHBOARD_PRIORITY] Interaction already responded")
         except _TRANSIENT_ERRORS as e:
-            log.warning("Priority selector dispatch interrupted (transient): %s", e)
+            log.warning("[DASHBOARD_PRIORITY] Dispatch interrupted (transient): %s", e)
 
 
 class _RemindButton(ui.Button):
@@ -867,18 +1001,39 @@ class _RemindButton(ui.Button):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        log.info(
+            "[DASHBOARD_REMIND] User %s (%s) toggling reminder in channel %s",
+            interaction.user.id, interaction.user.name, interaction.channel_id
+        )
+        
         if not await _staff_guard(interaction):
+            log.warning(
+                "[DASHBOARD_REMIND] Staff guard failed for user %s in channel %s",
+                interaction.user.id, interaction.channel_id
+            )
             return
         if not await _require_capability(interaction, "remind"):
+            log.warning(
+                "[DASHBOARD_REMIND] Capability check failed for user %s (remind)",
+                interaction.user.id
+            )
             return
         ticket = await _fresh_ticket(interaction)
         if ticket is None:
+            log.warning(
+                "[DASHBOARD_REMIND] No ticket found in channel %s",
+                interaction.channel_id
+            )
             await interaction.response.send_message(
                 embed=message_style.warning_embed(NO_TICKET_MSG),
                 ephemeral=True,
             )
             return
         if not await _owner_guard(interaction, ticket):
+            log.warning(
+                "[DASHBOARD_REMIND] Owner guard failed for user %s on ticket %s",
+                interaction.user.id, ticket["id"]
+            )
             return
 
         existing = await queries.get_reminder_for_staff(
@@ -886,15 +1041,15 @@ class _RemindButton(ui.Button):
         )
         if existing:
             await queries.delete_reminder(ticket["id"], interaction.user.id)
+            log.info(
+                "[DASHBOARD_REMIND_CANCEL] Reminder cancelled by %s for ticket %s",
+                interaction.user.id, ticket["id"]
+            )
             await interaction.response.send_message(
                 embed=message_style.success_embed(
                     "Your response alert for this ticket has been cancelled."
                 ),
                 ephemeral=True,
-            )
-            log.info(
-                "Dashboard reminder cancelled by %s for ticket %s",
-                interaction.user.id, ticket["id"],
             )
             return
 
@@ -902,17 +1057,21 @@ class _RemindButton(ui.Button):
             ticket["id"], interaction.user.id, interaction.guild_id,  # type: ignore[arg-type]
         )
         if created:
+            log.info(
+                "[DASHBOARD_REMIND_CREATE] Reminder created by %s for ticket %s",
+                interaction.user.id, ticket["id"]
+            )
             await interaction.response.send_message(
                 embed=message_style.success_embed(
                     "You will be notified when the ticket creator replies."
                 ),
                 ephemeral=True,
             )
-            log.info(
-                "Dashboard reminder created by %s for ticket %s",
-                interaction.user.id, ticket["id"],
-            )
         else:
+            log.info(
+                "[DASHBOARD_REMIND_EXISTS] Reminder already exists for user %s on ticket %s",
+                interaction.user.id, ticket["id"]
+            )
             await interaction.response.send_message(
                 embed=message_style.warning_embed(
                     "You already have an active response alert for this ticket."
@@ -932,26 +1091,50 @@ class _ContextButton(ui.Button):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        log.info(
+            "[DASHBOARD_CONTEXT] User %s (%s) viewing context in channel %s",
+            interaction.user.id, interaction.user.name, interaction.channel_id
+        )
+        
         if not await _staff_guard(interaction):
+            log.warning(
+                "[DASHBOARD_CONTEXT] Staff guard failed for user %s in channel %s",
+                interaction.user.id, interaction.channel_id
+            )
             return
         if not await _require_capability(interaction, "context"):
+            log.warning(
+                "[DASHBOARD_CONTEXT] Capability check failed for user %s (context)",
+                interaction.user.id
+            )
             return
         ticket = await _fresh_ticket(interaction)
         if ticket is None:
+            log.warning(
+                "[DASHBOARD_CONTEXT] No ticket found in channel %s",
+                interaction.channel_id
+            )
             await interaction.response.send_message(
                 embed=message_style.warning_embed(NO_TICKET_MSG),
                 ephemeral=True,
             )
             return
         if not await _owner_guard(interaction, ticket):
+            log.warning(
+                "[DASHBOARD_CONTEXT] Owner guard failed for user %s on ticket %s",
+                interaction.user.id, ticket["id"]
+            )
             return
 
         bot = interaction.client
         owner_user = None
         try:
             owner_user = await bot.fetch_user(ticket["user_id"])
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(
+                "[DASHBOARD_CONTEXT] Failed to fetch user %s for ticket %s: %s",
+                ticket["user_id"], ticket["id"], e
+            )
         owner_name = (
             owner_user.display_name
             if owner_user
@@ -969,7 +1152,11 @@ class _ContextButton(ui.Button):
                 owner_emoji = await emoji_service.get_emoji_for_staff(
                     interaction.guild_id, claimed_by,
                 )
-            except Exception:
+            except Exception as e:
+                log.warning(
+                    "[DASHBOARD_CONTEXT] Failed to fetch emoji for staff %s: %s",
+                    claimed_by, e
+                )
                 owner_emoji = None
 
         ticket_status = ticket.get("ticket_status", "open")
@@ -994,7 +1181,17 @@ class _ContextButton(ui.Button):
             relay_session,
             ticket.get("ticket_context_issue"),
         )
-        await interaction.response.send_message(embed=embed)
+        try:
+            await interaction.response.send_message(embed=embed)
+            log.debug(
+                "[DASHBOARD_CONTEXT] Context displayed for ticket %s",
+                ticket_number
+            )
+        except Exception as e:
+            log.error(
+                "[DASHBOARD_CONTEXT] Failed to send context embed: %s",
+                e, exc_info=True
+            )
 
 
 class _InfoButton(ui.Button):
@@ -1008,20 +1205,45 @@ class _InfoButton(ui.Button):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        log.info(
+            "[DASHBOARD_INFO] User %s (%s) viewing user info in channel %s",
+            interaction.user.id, interaction.user.name, interaction.channel_id
+        )
+        
         if not await _staff_guard(interaction):
+            log.warning(
+                "[DASHBOARD_INFO] Staff guard failed for user %s in channel %s",
+                interaction.user.id, interaction.channel_id
+            )
             return
         if not await _require_capability(interaction, "info"):
+            log.warning(
+                "[DASHBOARD_INFO] Capability check failed for user %s (info)",
+                interaction.user.id
+            )
             return
         if not await _history_guard(interaction):
+            log.warning(
+                "[DASHBOARD_INFO] History guard failed for user %s",
+                interaction.user.id
+            )
             return
         ticket = await _fresh_ticket(interaction)
         if ticket is None:
+            log.warning(
+                "[DASHBOARD_INFO] No ticket found in channel %s",
+                interaction.channel_id
+            )
             await interaction.response.send_message(
                 embed=message_style.warning_embed(NO_TICKET_MSG),
                 ephemeral=True,
             )
             return
         if not await _owner_guard(interaction, ticket):
+            log.warning(
+                "[DASHBOARD_INFO] Owner guard failed for user %s on ticket %s",
+                interaction.user.id, ticket["id"]
+            )
             return
 
         from bot.views.continuity import ContinuityView
@@ -1031,7 +1253,11 @@ class _InfoButton(ui.Button):
         source_guild = bot.get_guild(source_guild_id)
         try:
             owner = await bot.fetch_user(ticket["user_id"])
-        except Exception:
+        except Exception as e:
+            log.warning(
+                "[DASHBOARD_INFO] Failed to fetch user %s for ticket %s: %s",
+                ticket["user_id"], ticket["id"], e
+            )
             owner = None
         source_member = (
             source_guild.get_member(ticket["user_id"]) if source_guild else None
@@ -1083,10 +1309,20 @@ class _InfoButton(ui.Button):
             source_guild_id=source_guild_id,
             avatar_url=avatar_url,
         )
-        await interaction.response.send_message(
-            embed=embed,
-            view=ContinuityView(ticket["user_id"], source_guild_id),
-        )
+        try:
+            await interaction.response.send_message(
+                embed=embed,
+                view=ContinuityView(ticket["user_id"], source_guild_id),
+            )
+            log.debug(
+                "[DASHBOARD_INFO] User info displayed for ticket %s",
+                ticket_number
+            )
+        except Exception as e:
+            log.error(
+                "[DASHBOARD_INFO] Failed to send user info embed: %s",
+                e, exc_info=True
+            )
 
 
 class _HistoryButton(ui.Button):
@@ -1100,20 +1336,45 @@ class _HistoryButton(ui.Button):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        log.info(
+            "[DASHBOARD_HISTORY] User %s (%s) opening history view in channel %s",
+            interaction.user.id, interaction.user.name, interaction.channel_id
+        )
+        
         if not await _staff_guard(interaction):
+            log.warning(
+                "[DASHBOARD_HISTORY] Staff guard failed for user %s in channel %s",
+                interaction.user.id, interaction.channel_id
+            )
             return
         if not await _require_capability(interaction, "history"):
+            log.warning(
+                "[DASHBOARD_HISTORY] Capability check failed for user %s (history)",
+                interaction.user.id
+            )
             return
         if not await _history_guard(interaction):
+            log.warning(
+                "[DASHBOARD_HISTORY] History guard failed for user %s",
+                interaction.user.id
+            )
             return
         ticket = await _fresh_ticket(interaction)
         if ticket is None:
+            log.warning(
+                "[DASHBOARD_HISTORY] No ticket found in channel %s",
+                interaction.channel_id
+            )
             await interaction.response.send_message(
                 embed=message_style.warning_embed(NO_TICKET_MSG),
                 ephemeral=True,
             )
             return
         if not await _owner_guard(interaction, ticket):
+            log.warning(
+                "[DASHBOARD_HISTORY] Owner guard failed for user %s on ticket %s",
+                interaction.user.id, ticket["id"]
+            )
             return
 
         from bot.views.continuity import ContinuityView
@@ -1128,10 +1389,20 @@ class _HistoryButton(ui.Button):
             ),
             footer=f"User {ticket['user_id']} • Community {source_guild_id}",
         )
-        await interaction.response.send_message(
-            embed=embed,
-            view=ContinuityView(ticket["user_id"], source_guild_id),
-        )
+        try:
+            await interaction.response.send_message(
+                embed=embed,
+                view=ContinuityView(ticket["user_id"], source_guild_id),
+            )
+            log.debug(
+                "[DASHBOARD_HISTORY] History view displayed for ticket %s",
+                ticket["id"]
+            )
+        except Exception as e:
+            log.error(
+                "[DASHBOARD_HISTORY] Failed to send history view: %s",
+                e, exc_info=True
+            )
 
 
 class _AddNoteButton(ui.Button):
@@ -1145,18 +1416,39 @@ class _AddNoteButton(ui.Button):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        log.info(
+            "[DASHBOARD_NOTE_ADD] User %s (%s) opening note modal in channel %s",
+            interaction.user.id, interaction.user.name, interaction.channel_id
+        )
+        
         if not await _staff_guard(interaction):
+            log.warning(
+                "[DASHBOARD_NOTE_ADD] Staff guard failed for user %s in channel %s",
+                interaction.user.id, interaction.channel_id
+            )
             return
         if not await _require_capability(interaction, "note_add"):
+            log.warning(
+                "[DASHBOARD_NOTE_ADD] Capability check failed for user %s (note_add)",
+                interaction.user.id
+            )
             return
         ticket = await _fresh_ticket(interaction)
         if ticket is None:
+            log.warning(
+                "[DASHBOARD_NOTE_ADD] No ticket found in channel %s",
+                interaction.channel_id
+            )
             await interaction.response.send_message(
                 embed=message_style.warning_embed(NO_TICKET_MSG),
                 ephemeral=True,
             )
             return
         if not await _owner_guard(interaction, ticket):
+            log.warning(
+                "[DASHBOARD_NOTE_ADD] Owner guard failed for user %s on ticket %s",
+                interaction.user.id, ticket["id"]
+            )
             return
         await _safe_send_modal(interaction, _NoteModal(), "note")
 
@@ -1172,18 +1464,39 @@ class _MoveButton(ui.Button):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        log.info(
+            "[DASHBOARD_MOVE] User %s (%s) opening move modal in channel %s",
+            interaction.user.id, interaction.user.name, interaction.channel_id
+        )
+        
         if not await _staff_guard(interaction):
+            log.warning(
+                "[DASHBOARD_MOVE] Staff guard failed for user %s in channel %s",
+                interaction.user.id, interaction.channel_id
+            )
             return
         if not await _require_capability(interaction, "move"):
+            log.warning(
+                "[DASHBOARD_MOVE] Capability check failed for user %s (move)",
+                interaction.user.id
+            )
             return
         ticket = await _fresh_ticket(interaction)
         if ticket is None:
+            log.warning(
+                "[DASHBOARD_MOVE] No ticket found in channel %s",
+                interaction.channel_id
+            )
             await interaction.response.send_message(
                 embed=message_style.warning_embed(NO_TICKET_MSG),
                 ephemeral=True,
             )
             return
         if not await _owner_guard(interaction, ticket):
+            log.warning(
+                "[DASHBOARD_MOVE] Owner guard failed for user %s on ticket %s",
+                interaction.user.id, ticket["id"]
+            )
             return
         await _safe_send_modal(interaction, _MoveModal(), "move")
 
@@ -1199,18 +1512,39 @@ class _CloseButton(ui.Button):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        log.info(
+            "[DASHBOARD_CLOSE] User %s (%s) opening close modal in channel %s",
+            interaction.user.id, interaction.user.name, interaction.channel_id
+        )
+        
         if not await _staff_guard(interaction):
+            log.warning(
+                "[DASHBOARD_CLOSE] Staff guard failed for user %s in channel %s",
+                interaction.user.id, interaction.channel_id
+            )
             return
         if not await _require_capability(interaction, "close"):
+            log.warning(
+                "[DASHBOARD_CLOSE] Capability check failed for user %s (close)",
+                interaction.user.id
+            )
             return
         ticket = await _fresh_ticket(interaction)
         if ticket is None:
+            log.warning(
+                "[DASHBOARD_CLOSE] No ticket found in channel %s",
+                interaction.channel_id
+            )
             await interaction.response.send_message(
                 embed=message_style.warning_embed(NO_TICKET_MSG),
                 ephemeral=True,
             )
             return
         if not await _owner_guard(interaction, ticket):
+            log.warning(
+                "[DASHBOARD_CLOSE] Owner guard failed for user %s on ticket %s",
+                interaction.user.id, ticket["id"]
+            )
             return
         await _safe_send_modal(interaction, _CloseModal(), "close")
 

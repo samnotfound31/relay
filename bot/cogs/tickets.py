@@ -301,7 +301,16 @@ class Tickets(commands.Cog):
     )
     @_dm_command
     async def leave(self, interaction: discord.Interaction) -> None:
+        log.info(
+            "[TICKET_LEAVE] User %s (%s) attempting to leave session",
+            interaction.user.id, interaction.user.name
+        )
+        
         if interaction.guild is not None:
+            log.warning(
+                "[TICKET_LEAVE] User %s attempted to use /leave in a server (DM-only command)",
+                interaction.user.id
+            )
             await interaction.response.send_message(
                 embed=message_style.error_embed("This command can only be used in DMs."),
                 ephemeral=True,
@@ -312,11 +321,20 @@ class Tickets(commands.Cog):
             self.bot, interaction.user.id,
         )
         if ticket is None:
+            log.warning(
+                "[TICKET_LEAVE] User %s has no active session",
+                interaction.user.id
+            )
             await interaction.response.send_message(
                 embed=message_style.warning_embed("You do not have an active Relay session."),
                 ephemeral=True,
             )
             return
+
+        log.info(
+            "[TICKET_LEAVE] Showing confirmation for user %s (ticket %s)",
+            interaction.user.id, ticket["id"]
+        )
 
         # Show confirmation view instead of immediate disconnect
         embed = message_style.relay_embed(
@@ -358,12 +376,29 @@ class Tickets(commands.Cog):
         interaction: discord.Interaction,
         issue: str | None = None,
     ) -> None:
+        log.info(
+            "[TICKET_CONTEXT] User %s (%s) viewing context in channel %s",
+            interaction.user.id, interaction.user.name, interaction.channel_id
+        )
+        
         if not await self._check_staff(interaction):
+            log.warning(
+                "[TICKET_CONTEXT] Staff check failed for user %s",
+                interaction.user.id
+            )
             return
         if not await _require_capability(interaction, "context"):
+            log.warning(
+                "[TICKET_CONTEXT] Capability check failed for user %s (context)",
+                interaction.user.id
+            )
             return
         ticket = await self._check_ticket_channel(interaction)
         if ticket is None:
+            log.warning(
+                "[TICKET_CONTEXT] No ticket found in channel %s",
+                interaction.channel_id
+            )
             return
 
         if issue is not None:
@@ -375,6 +410,10 @@ class Tickets(commands.Cog):
                 clean_issue or None,
             )
             ticket["ticket_context_issue"] = clean_issue or None
+            log.info(
+                "[TICKET_CONTEXT] Updated context issue for ticket %s",
+                ticket["id"]
+            )
 
         owner_user = await self._resolve_ticket_owner(ticket)
         owner_name = owner_user.display_name if owner_user else f"User {ticket['user_id']}"
@@ -413,7 +452,17 @@ class Tickets(commands.Cog):
             relay_session,
             ticket.get("ticket_context_issue"),
         )
-        await interaction.response.send_message(embed=embed)
+        try:
+            await interaction.response.send_message(embed=embed)
+            log.debug(
+                "[TICKET_CONTEXT] Context displayed for ticket %s",
+                ticket_number
+            )
+        except Exception as e:
+            log.error(
+                "[TICKET_CONTEXT] Failed to send context embed: %s",
+                e, exc_info=True
+            )
 
     # ── /history ──────────────────────────────────────
 
@@ -422,14 +471,35 @@ class Tickets(commands.Cog):
         description="Open focused continuity retrieval for this ticket user.",
     )
     async def history(self, interaction: discord.Interaction) -> None:
+        log.info(
+            "[TICKET_HISTORY] User %s (%s) opening history view in channel %s",
+            interaction.user.id, interaction.user.name, interaction.channel_id
+        )
+        
         if not await self._check_staff(interaction):
+            log.warning(
+                "[TICKET_HISTORY] Staff check failed for user %s",
+                interaction.user.id
+            )
             return
         if not await _require_capability(interaction, "history"):
+            log.warning(
+                "[TICKET_HISTORY] Capability check failed for user %s (history)",
+                interaction.user.id
+            )
             return
         if not await self._check_investigative_access(interaction, "history"):
+            log.warning(
+                "[TICKET_HISTORY] Investigative access check failed for user %s",
+                interaction.user.id
+            )
             return
         ticket = await self._check_ticket_channel(interaction)
         if ticket is None:
+            log.warning(
+                "[TICKET_HISTORY] No ticket found in channel %s",
+                interaction.channel_id
+            )
             return
 
         source_guild_id = self._source_guild_id(ticket, interaction.guild_id)
@@ -444,10 +514,20 @@ class Tickets(commands.Cog):
         )
 
         from bot.views.continuity import ContinuityView
-        await interaction.response.send_message(
-            embed=embed,
-            view=ContinuityView(ticket["user_id"], source_guild_id),
-        )
+        try:
+            await interaction.response.send_message(
+                embed=embed,
+                view=ContinuityView(ticket["user_id"], source_guild_id),
+            )
+            log.debug(
+                "[TICKET_HISTORY] History view displayed for ticket %s",
+                ticket["id"]
+            )
+        except Exception as e:
+            log.error(
+                "[TICKET_HISTORY] Failed to send history view: %s",
+                e, exc_info=True
+            )
 
     # ── /info ─────────────────────────────────────────
 
@@ -528,14 +608,35 @@ class Tickets(commands.Cog):
         message: str,
         attachment: discord.Attachment | None = None,
     ) -> None:
+        log.info(
+            "[TICKET_REPLY] Staff %s (%s) sending reply in channel %s",
+            interaction.user.id, interaction.user.name, interaction.channel_id
+        )
+        
         if not await self._check_staff(interaction):
+            log.warning(
+                "[TICKET_REPLY] Staff check failed for user %s",
+                interaction.user.id
+            )
             return
         if not await _require_capability(interaction, "reply"):
+            log.warning(
+                "[TICKET_REPLY] Capability check failed for user %s (reply)",
+                interaction.user.id
+            )
             return
         ticket = await self._check_ticket_channel(interaction)
         if ticket is None:
+            log.warning(
+                "[TICKET_REPLY] No ticket found in channel %s",
+                interaction.channel_id
+            )
             return
         if not await self._check_relay_session_active(interaction, ticket):
+            log.warning(
+                "[TICKET_REPLY] Relay session not active for ticket %s",
+                ticket["id"]
+            )
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -554,11 +655,19 @@ class Tickets(commands.Cog):
         )
 
         if success:
+            log.info(
+                "[TICKET_REPLY_SUCCESS] Reply sent for ticket in channel %s",
+                interaction.channel_id
+            )
             await interaction.followup.send(
                 embed=message_style.success_embed("Reply sent."),
                 ephemeral=True,
             )
         else:
+            log.warning(
+                "[TICKET_REPLY_FAILED] Failed to send reply for ticket in channel %s",
+                interaction.channel_id
+            )
             await interaction.followup.send(
                 embed=message_style.error_embed(
                     "Failed to send reply. The user may have DMs closed."
@@ -582,14 +691,35 @@ class Tickets(commands.Cog):
         message: str,
         attachment: discord.Attachment | None = None,
     ) -> None:
+        log.info(
+            "[TICKET_ANREPLY] Staff %s (%s) sending anonymous reply in channel %s",
+            interaction.user.id, interaction.user.name, interaction.channel_id
+        )
+        
         if not await self._check_staff(interaction):
+            log.warning(
+                "[TICKET_ANREPLY] Staff check failed for user %s",
+                interaction.user.id
+            )
             return
         if not await _require_capability(interaction, "anreply"):
+            log.warning(
+                "[TICKET_ANREPLY] Capability check failed for user %s (anreply)",
+                interaction.user.id
+            )
             return
         ticket = await self._check_ticket_channel(interaction)
         if ticket is None:
+            log.warning(
+                "[TICKET_ANREPLY] No ticket found in channel %s",
+                interaction.channel_id
+            )
             return
         if not await self._check_relay_session_active(interaction, ticket):
+            log.warning(
+                "[TICKET_ANREPLY] Relay session not active for ticket %s",
+                ticket["id"]
+            )
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -607,46 +737,23 @@ class Tickets(commands.Cog):
         )
 
         if success:
+            log.info(
+                "[TICKET_ANREPLY_SUCCESS] Anonymous reply sent for ticket in channel %s",
+                interaction.channel_id
+            )
             await interaction.followup.send(
                 embed=message_style.success_embed("Anonymous reply sent."),
                 ephemeral=True,
             )
         else:
+            log.warning(
+                "[TICKET_ANREPLY_FAILED] Failed to send anonymous reply for ticket in channel %s",
+                interaction.channel_id
+            )
             await interaction.followup.send(
                 embed=message_style.error_embed(
                     "Failed to send reply. The user may have DMs closed."
                 ),
-                ephemeral=True,
-            )
-
-    # ── /claim ────────────────────────────────────────
-
-    @app_commands.command(
-        name="claim",
-        description="Claim ownership of this ticket.",
-    )
-    async def claim(self, interaction: discord.Interaction) -> None:
-        if not await self._check_staff(interaction):
-            return
-        if not await _require_capability(interaction, "claim"):
-            return
-        ticket = await self._check_ticket_channel(interaction)
-        if ticket is None:
-            return
-
-        await interaction.response.defer()
-
-        success, msg = await workflow_service.claim_ticket(
-            interaction.channel, interaction.user, self.bot,  # type: ignore
-        )
-
-        if success:
-            await interaction.followup.send(
-                embed=message_style.success_embed(msg),
-            )
-        else:
-            await interaction.followup.send(
-                embed=message_style.warning_embed(msg),
                 ephemeral=True,
             )
 
@@ -662,16 +769,37 @@ class Tickets(commands.Cog):
         interaction: discord.Interaction,
         staff: discord.Member,
     ) -> None:
+        log.info(
+            "[TICKET_TRANSFER] Staff %s (%s) transferring ticket in channel %s to %s",
+            interaction.user.id, interaction.user.name, interaction.channel_id, staff.id
+        )
+        
         if not await self._check_staff(interaction):
+            log.warning(
+                "[TICKET_TRANSFER] Staff check failed for user %s",
+                interaction.user.id
+            )
             return
         if not await _require_capability(interaction, "transfer"):
+            log.warning(
+                "[TICKET_TRANSFER] Capability check failed for user %s (transfer)",
+                interaction.user.id
+            )
             return
         ticket = await self._check_ticket_channel(interaction)
         if ticket is None:
+            log.warning(
+                "[TICKET_TRANSFER] No ticket found in channel %s",
+                interaction.channel_id
+            )
             return
 
         # Verify target is staff
         if not await permission_service.is_staff(staff, interaction.guild_id):
+            log.warning(
+                "[TICKET_TRANSFER] Target %s is not a staff member",
+                staff.id
+            )
             await interaction.response.send_message(
                 embed=message_style.error_embed(
                     f"{staff.mention} is not a support staff member."
@@ -687,10 +815,18 @@ class Tickets(commands.Cog):
         )
 
         if success:
+            log.info(
+                "[TICKET_TRANSFER_SUCCESS] Ticket transferred to %s in channel %s",
+                staff.id, interaction.channel_id
+            )
             await interaction.followup.send(
                 embed=message_style.success_embed(msg),
             )
         else:
+            log.warning(
+                "[TICKET_TRANSFER_FAILED] Transfer failed in channel %s: %s",
+                interaction.channel_id, msg
+            )
             await interaction.followup.send(
                 embed=message_style.error_embed(msg),
                 ephemeral=True,
@@ -717,12 +853,29 @@ class Tickets(commands.Cog):
         interaction: discord.Interaction,
         status: app_commands.Choice[str],
     ) -> None:
+        log.info(
+            "[TICKET_STATUS] Staff %s (%s) setting status to %s in channel %s",
+            interaction.user.id, interaction.user.name, status.value, interaction.channel_id
+        )
+        
         if not await self._check_staff(interaction):
+            log.warning(
+                "[TICKET_STATUS] Staff check failed for user %s",
+                interaction.user.id
+            )
             return
         if not await _require_capability(interaction, "status"):
+            log.warning(
+                "[TICKET_STATUS] Capability check failed for user %s (status)",
+                interaction.user.id
+            )
             return
         ticket = await self._check_ticket_channel(interaction)
         if ticket is None:
+            log.warning(
+                "[TICKET_STATUS] No ticket found in channel %s",
+                interaction.channel_id
+            )
             return
 
         await interaction.response.defer()
@@ -732,10 +885,18 @@ class Tickets(commands.Cog):
         )
 
         if success:
+            log.info(
+                "[TICKET_STATUS_SUCCESS] Status set to %s for ticket in channel %s",
+                status.value, interaction.channel_id
+            )
             await interaction.followup.send(
                 embed=message_style.success_embed(msg),
             )
         else:
+            log.warning(
+                "[TICKET_STATUS_FAILED] Status change failed in channel %s: %s",
+                interaction.channel_id, msg
+            )
             await interaction.followup.send(
                 embed=message_style.error_embed(msg),
                 ephemeral=True,
@@ -757,16 +918,37 @@ class Tickets(commands.Cog):
         duration: str | None = None,
         message: str | None = None,
     ) -> None:
+        log.info(
+            "[TICKET_CLOSE] Staff %s (%s) closing ticket in channel %s (duration: %s)",
+            interaction.user.id, interaction.user.name, interaction.channel_id, duration
+        )
+        
         if not await self._check_staff(interaction):
+            log.warning(
+                "[TICKET_CLOSE] Staff check failed for user %s",
+                interaction.user.id
+            )
             return
         if not await _require_capability(interaction, "close"):
+            log.warning(
+                "[TICKET_CLOSE] Capability check failed for user %s (close)",
+                interaction.user.id
+            )
             return
         ticket = await self._check_ticket_channel(interaction)
         if ticket is None:
+            log.warning(
+                "[TICKET_CLOSE] No ticket found in channel %s",
+                interaction.channel_id
+            )
             return
 
         channel = interaction.channel
         if not isinstance(channel, discord.TextChannel):
+            log.warning(
+                "[TICKET_CLOSE] Invalid channel type in channel %s",
+                interaction.channel_id
+            )
             return
         closure_message = message.strip() if message else None
 
@@ -779,7 +961,7 @@ class Tickets(commands.Cog):
         if existing_schedule:
             existing_label = ticket.get("autoclose_duration") or "scheduled"
             log.info(
-                "Duplicate /close blocked for channel %s (already scheduled: %s)",
+                "[TICKET_CLOSE] Duplicate close blocked for channel %s (already scheduled: %s)",
                 channel.id, existing_schedule,
             )
             await interaction.response.send_message(
@@ -793,6 +975,10 @@ class Tickets(commands.Cog):
 
         # ── Immediate close ──
         if not duration:
+            log.info(
+                "[TICKET_CLOSE_IMMEDIATE] Immediate close for ticket in channel %s",
+                channel.id
+            )
             await interaction.response.send_message(
                 embed=message_style.relay_embed(
                     description="🔒 Closing ticket…",
@@ -803,6 +989,10 @@ class Tickets(commands.Cog):
                 channel, interaction.user, self.bot, closure_message,  # type: ignore
             )
             if not success:
+                log.warning(
+                    "[TICKET_CLOSE_FAILED] Immediate close failed for channel %s",
+                    channel.id
+                )
                 try:
                     await interaction.followup.send(
                         embed=message_style.error_embed("No open ticket found in this channel."),
@@ -810,11 +1000,20 @@ class Tickets(commands.Cog):
                     )
                 except Exception:
                     pass
+            else:
+                log.info(
+                    "[TICKET_CLOSE_SUCCESS] Ticket closed in channel %s",
+                    channel.id
+                )
             return
 
         # ── Scheduled autoclose ──
         parsed = _parse_duration(duration)
         if parsed is None:
+            log.warning(
+                "[TICKET_CLOSE] Invalid duration format: %s",
+                duration
+            )
             await interaction.response.send_message(
                 embed=message_style.error_embed(
                     "Invalid duration. Use a single-unit format like `30s`, `25m`, `2h`, or `3d`."
@@ -833,7 +1032,7 @@ class Tickets(commands.Cog):
             channel.id, close_at_db, duration_label, closure_message,
         )
         log.info(
-            "Autoclose scheduled for channel %s in %s (at %s UTC)",
+            "[TICKET_CLOSE_SCHEDULED] Autoclose scheduled for channel %s in %s (at %s UTC)",
             channel.id, duration_label, close_at_db,
         )
 

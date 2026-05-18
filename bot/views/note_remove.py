@@ -10,7 +10,8 @@ import logging
 import discord
 from discord import ui
 
-from bot.services import note_service, permission_audit, permission_service
+from bot.services import note_service, permission_service
+from bot.services.permission_service import PREFLIGHT_FAILURE_MESSAGE
 
 log = logging.getLogger(__name__)
 
@@ -121,25 +122,11 @@ class _NoteRemoveSelect(ui.Select):
                 view=None,
             )
         except discord.Forbidden as e:
-            guild = interaction.guild or view.actor.guild if "view" in locals() else interaction.guild
-            audit = (
-                permission_audit.audit_permissions(
-                    guild,
-                    "dashboard_setup",
-                    context="note_remove_forbidden",
-                )
-                if guild
-                else None
-            )
             log.error(
-                "[PERMISSION_ERROR] Forbidden in NoteRemove callback for user %s: %s missing=%s",
-                interaction.user.id, e, audit.missing_labels if audit else [], exc_info=True
+                "[PERMISSION_ERROR] Forbidden in NoteRemove callback for user %s: %s",
+                interaction.user.id, e, exc_info=True
             )
-            embed = (
-                permission_audit.missing_permissions_embed(audit)
-                if audit
-                else discord.Embed(description="Relay is missing required permissions.", color=0xED4245)
-            )
+            embed = discord.Embed(description=PREFLIGHT_FAILURE_MESSAGE, color=0xED4245)
             try:
                 if not interaction.response.is_done():
                     await interaction.response.send_message(

@@ -10,7 +10,8 @@ import logging
 
 import discord
 from bot.database import queries
-from bot.services import ticket_service, message_style, permission_audit
+from bot.services import ticket_service, message_style
+from bot.services.permission_service import PREFLIGHT_FAILURE_MESSAGE
 
 log = logging.getLogger(__name__)
 
@@ -79,7 +80,7 @@ class CategorySelect(discord.ui.Select):
                 block_msg = result or "You already have an open ticket."
                 embed = (
                     message_style.error_embed(block_msg)
-                    if block_msg.startswith("Relay is missing the following required permissions:")
+                    if block_msg == PREFLIGHT_FAILURE_MESSAGE
                     else message_style.warning_embed(block_msg)
                 )
                 await interaction.followup.send(
@@ -97,16 +98,7 @@ class CategorySelect(discord.ui.Select):
                 )
         except discord.Forbidden as e:
             log.error("Forbidden error in CategorySelect callback for user %s: %s", interaction.user.id, e, exc_info=True)
-            audit = permission_audit.audit_permissions(
-                guild,
-                "ticket_workflow",
-                context="category_select_forbidden",
-            ) if "guild" in locals() and guild else None
-            embed = (
-                permission_audit.missing_permissions_embed(audit)
-                if audit
-                else message_style.error_embed("Relay is missing required permissions.")
-            )
+            embed = message_style.error_embed(PREFLIGHT_FAILURE_MESSAGE)
             try:
                 if not interaction.response.is_done():
                     await interaction.response.send_message(

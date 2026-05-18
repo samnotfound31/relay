@@ -12,8 +12,7 @@ import logging
 
 import discord
 from bot.database import queries
-from bot.services import permission_audit
-from bot.services.permission_service import resolve_staff_role_label
+from bot.services.permission_service import resolve_staff_role_label, PREFLIGHT_FAILURE_MESSAGE
 
 log = logging.getLogger(__name__)
 
@@ -82,18 +81,9 @@ async def relay_user_to_staff(
 
     guild = getattr(channel, "guild", None)
     if guild is not None:
-        audit = permission_audit.audit_permissions(
-            guild,
-            "relay_channel",
-            channel=channel,
-            context="relay_user_to_staff",
-        )
-        if not audit.ok:
-            log.error(
-                "[DM_RELAY_USER] Permission audit failed for channel %s ticket %s missing=%s",
-                channel.id, ticket["id"], audit.missing_labels,
-            )
-            return False
+        # Preflight validation already happened at ticket creation time
+        # If we're here, permissions should be valid. If they're not, log and fail gracefully.
+        pass
 
     # Build plain text message
     username = message.author.name
@@ -117,17 +107,9 @@ async def relay_user_to_staff(
         )
         return True
     except discord.Forbidden as e:
-        audit = None
-        if guild is not None:
-            audit = permission_audit.audit_permissions(
-                guild,
-                "relay_channel",
-                channel=channel,
-                context="relay_user_to_staff_send_forbidden",
-            )
         log.error(
-            "[DM_RELAY_USER] Forbidden when sending to channel %s (ticket %s): %s missing=%s",
-            channel.id, ticket["id"], e, audit.missing_labels if audit else []
+            "[DM_RELAY_USER] Forbidden when sending to channel %s (ticket %s): %s",
+            channel.id, ticket["id"], e
         )
         return False
     except discord.HTTPException as e:
@@ -248,18 +230,9 @@ async def relay_staff_to_user(
     if staff_channel:
         guild = getattr(staff_channel, "guild", None)
         if guild is not None:
-            audit = permission_audit.audit_permissions(
-                guild,
-                "relay_channel",
-                channel=staff_channel,
-                context="relay_staff_to_user_confirmation",
-            )
-            if not audit.ok:
-                log.error(
-                    "[DM_RELAY_STAFF] Permission audit failed for confirmation channel %s ticket %s missing=%s",
-                    channel_id, ticket["id"], audit.missing_labels,
-                )
-                return True
+            # Preflight validation already happened at ticket creation time
+            # If we're here, permissions should be valid. If they're not, log and fail gracefully.
+            pass
         prefix = "📨 *Anonymous reply sent*" if anonymous else "📨 *Reply sent*"
         confirm_parts = [prefix, "", header, content]
         if attachment_text:

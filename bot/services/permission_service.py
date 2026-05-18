@@ -7,8 +7,143 @@ Phase 6: granular command-level permissions for staff roles.
 
 from __future__ import annotations
 
+import logging
+
 import discord
 from bot.database.queries import get_support_roles, get_role_denied_capabilities
+
+log = logging.getLogger(__name__)
+
+# Fixed required permissions for Relay bot operations
+REQUIRED_BOT_PERMISSIONS = [
+    "manage_channels",
+    "view_channel",
+    "send_messages",
+    "manage_messages",
+    "embed_links",
+    "read_message_history",
+]
+
+PREFLIGHT_FAILURE_MESSAGE = (
+    "Relay is missing one or more required permissions or category access.\n\n"
+    "Please ensure:\n"
+    "• Relay has all required server permissions\n"
+    "• Relay is included in the ticket category permissions\n"
+    "• Relay can view and manage the target ticket category/channels\n\n"
+    "Required permissions:\n"
+    "• Manage Channels\n"
+    "• View Channels\n"
+    "• Send Messages\n"
+    "• Manage Messages\n"
+    "• Embed Links\n"
+    "• Read Message History\n\n"
+    "Ticket creation has been cancelled to prevent partial session initialization."
+)
+
+
+def validate_bot_permissions(guild: discord.Guild) -> bool:
+    """
+    Validate that the bot has all required permissions at the guild level.
+    Returns True if all permissions are present, False otherwise.
+    """
+    bot_member = guild.me
+    if bot_member is None:
+        log.error("[PERMISSION_AUDIT] Bot member not found in guild %s", guild.id)
+        return False
+
+    permissions = bot_member.guild_permissions
+    if permissions.administrator:
+        log.info("[PERMISSION_AUDIT] Bot has administrator in guild %s", guild.id)
+        return True
+
+    missing = []
+    for perm in REQUIRED_BOT_PERMISSIONS:
+        if not getattr(permissions, perm, False):
+            missing.append(perm)
+
+    if missing:
+        log.error(
+            "[PERMISSION_AUDIT] Bot missing permissions in guild %s: %s",
+            guild.id, missing
+        )
+        return False
+
+    log.info("[PERMISSION_AUDIT] Bot has all required permissions in guild %s", guild.id)
+    return True
+
+
+def validate_category_access(
+    guild: discord.Guild,
+    category: discord.CategoryChannel | None = None,
+) -> bool:
+    """
+    Validate that the bot can access the target category and is included in its overwrites.
+    Returns True if category is accessible, False otherwise.
+    """
+    if category is None:
+        # No category specified, will create default category
+        log.info("[CATEGORY_ACCESS] No category specified, will create default")
+        return True
+
+    bot_member = guild.me
+    if bot_member is None:
+        log.error("[CATEGORY_ACCESS] Bot member not found in guild %s", guild.id)
+        return False
+
+    # Check if bot can view the category
+    category_permissions = category.permissions_for(bot_member)
+    if not category_permissions.view_channel:
+        log.error(
+            "[CATEGORY_ACCESS] Bot cannot view category %s in guild %s",
+            category.id, guild.id
+        )
+        return False
+
+    # Check if bot has required permissions in the category
+    required = ["manage_channels", "send_messages", "manage_messages", "embed_links", "attach_files", "read_message_history"]
+    missing = []
+    for perm in required:
+        if not getattr(category_permissions, perm, False):
+            missing.append(perm)
+
+    if missing:
+        log.error(
+            "[CATEGORY_ACCESS] Bot missing permissions in category %s in guild %s: %s",
+            category.id, guild.id, missing
+        )
+        return False
+
+    log.info(
+        "[CATEGORY_ACCESS] Bot has required access to category %s in guild %s",
+        category.id, guild.id
+    )
+    return True
+
+
+def validate_ticket_workflow(guild: discord.Guild, category: discord.CategoryChannel | None = None) -> bool:
+    """
+    Preflight validation for ticket creation workflow.
+    Validates:
+    - Bot has required guild-level permissions
+    - Bot can access the target category (if specified)
+    Returns True if workflow can proceed, False otherwise.
+    """
+    log.info(
+        "[TICKET_CREATE] Preflight validation for guild %s category %s",
+        guild.id, category.id if category else None
+    )
+
+    if not validate_bot_permissions(guild):
+        return False
+
+    if category and not validate_category_access(guild, category):
+        return False
+
+    log.info(
+        "[TICKET_CREATE] Preflight validation passed for guild %s",
+        guild.id
+    )
+    return True
 
 
 async def is_staff(member: discord.Member, guild_id: int) -> bool:

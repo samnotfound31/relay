@@ -19,7 +19,8 @@ import discord
 from bot.config import STATUS_EMOJIS
 from bot.database import queries
 from bot.services.emoji_service import get_emoji_for_staff
-from bot.services import permission_audit, rename_governance
+from bot.services import rename_governance
+from bot.services.permission_service import PREFLIGHT_FAILURE_MESSAGE
 
 log = logging.getLogger("relay.workflow")
 
@@ -310,34 +311,13 @@ async def _get_or_create_transcript_log_channel(
     guild: discord.Guild,
 ) -> discord.TextChannel | None:
     """Return the configured transcript log channel, or auto-create one."""
-    audit = permission_audit.audit_permissions(
-        guild,
-        "transcript_logging",
-        context="transcript_log_channel_init",
-    )
-    if not audit.ok:
-        log.error(
-            "[TRANSCRIPT_LOG_PERMISSIONS] Cannot initialize transcript logging in guild %s missing=%s",
-            guild.id, audit.missing_labels,
-        )
-        return None
+    log.info("[TRANSCRIPT_LOG] Initializing transcript log channel for guild %s", guild.id)
 
     settings = await queries.get_transcript_settings(guild.id)
     if settings and settings.get("log_channel_id"):
         ch = guild.get_channel(settings["log_channel_id"])
         if isinstance(ch, discord.TextChannel):
-            audit = permission_audit.audit_permissions(
-                guild,
-                "transcript_logging",
-                channel=ch,
-                context="transcript_log_channel_existing",
-            )
-            if not audit.ok:
-                log.error(
-                    "[TRANSCRIPT_LOG_PERMISSIONS] Existing transcript channel %s missing=%s",
-                    ch.id, audit.missing_labels,
-                )
-                return None
+            log.info("[TRANSCRIPT_LOG] Using existing transcript channel %s in guild %s", ch.id, guild.id)
             return ch
 
     # Auto-create relay-transcripts channel
@@ -360,15 +340,11 @@ async def _get_or_create_transcript_log_channel(
             overwrites=overwrites,
             reason="Relay auto-created transcript log channel",
         )
+        log.info("[TRANSCRIPT_LOG] Successfully created transcript channel %s in guild %s", channel.id, guild.id)
     except discord.Forbidden as e:
-        audit = permission_audit.audit_permissions(
-            guild,
-            "transcript_logging",
-            context="transcript_log_channel_forbidden",
-        )
         log.error(
-            "[TRANSCRIPT_LOG_PERMISSIONS] Forbidden creating transcript channel in guild %s: %s missing=%s",
-            guild.id, e, audit.missing_labels,
+            "[PERMISSION_ERROR] Forbidden creating transcript channel in guild %s: %s",
+            guild.id, e, exc_info=True
         )
         return None
 
@@ -390,26 +366,44 @@ async def close_ticket(
     4. DM user closure confirmation
     5. Delete the channel entirely
     """
+    log.info(
+        "[CLOSE_WORKFLOW] Starting close workflow for channel %s by user %s",
+        channel.id, closed_by.id
+    )
+
     ticket = await queries.close_ticket(channel.id)
     if ticket is None:
+        log.error("[CLOSE_WORKFLOW] Failed to close ticket in database for channel %s", channel.id)
         return False, None
+
+    log.info(
+        "[CLOSE_WORKFLOW] Ticket %s marked as closed in database",
+        ticket["id"]
+    )
 
     # Clear all response reminders for this ticket
     await queries.delete_all_reminders_for_ticket(ticket["id"])
+    log.info("[CLOSE_WORKFLOW] Cleared all reminders for ticket %s", ticket["id"])
 
     guild = channel.guild
     source_guild_id = ticket.get("source_guild_id")
 
     # ── Transcript generation ──
+    log.info("[TRANSCRIPT_GENERATION] Starting transcript generation for ticket %s", ticket["id"])
     from bot.services import transcript_service
     try:
         filepath = await transcript_service.generate_transcript(channel, ticket, closed_by)
+        log.info("[TRANSCRIPT_GENERATION] Successfully generated transcript for ticket %s: %s", ticket["id"], filepath)
     except Exception as e:
-        log.warning(f"Transcript generation failed for ticket {ticket['id']}: {e}")
+        log.error(
+            "[TRANSCRIPT_GENERATION] Failed to generate transcript for ticket %s: %s",
+            ticket["id"], e, exc_info=True
+        )
         filepath = None
 
     if filepath:
         try:
+            log.info("[TRANSCRIPT_UPLOAD] Uploading transcript for ticket %s", ticket["id"])
             transcript_id = await queries.create_transcript(
                 ticket_id=ticket["id"],
                 user_id=ticket["user_id"],
@@ -419,6 +413,7 @@ async def close_ticket(
                 file_path=filepath,
                 closed_by=closed_by.id,
             )
+            log.info("[TRANSCRIPT_UPLOAD] Transcript record created in database: %s", transcript_id)
 
             # Log to transcript channel
             log_channel = await _get_or_create_transcript_log_channel(guild)
@@ -435,12 +430,23 @@ async def close_ticket(
                         log_channel.id,
                         transcript_msg.id,
                     )
+                    log.info(
+                        "[TRANSCRIPT_UPLOAD] Successfully uploaded transcript to channel %s for ticket %s",
+                        log_channel.id, ticket["id"]
+                    )
                 except Exception as e:
-                    log.warning(f"Failed to send transcript to log channel: {e}")
+                    log.error(
+                        "[TRANSCRIPT_UPLOAD] Failed to send transcript to log channel %s for ticket %s: %s",
+                        log_channel.id, ticket["id"], e, exc_info=True
+                    )
         except Exception as e:
-            log.warning(f"Transcript logging failed for ticket {ticket['id']}: {e}")
+            log.error(
+                "[TRANSCRIPT_UPLOAD] Transcript logging failed for ticket %s: %s",
+                ticket["id"], e, exc_info=True
+            )
 
     # DM the user (closure confirmation)
+    log.info("[SESSION_START] Sending closure DM to user %s for ticket %s", ticket["user_id"], ticket["id"])
     try:
         from bot.services import message_style
         user = await bot.fetch_user(ticket["user_id"])
@@ -456,26 +462,30 @@ async def close_ticket(
             final_message,
         )
         await user.send(embed=embed)
-    except Exception:
-        pass
+        log.info("[DM_SUCCESS] Successfully sent closure DM to user %s for ticket %s", ticket["user_id"], ticket["id"])
+    except Exception as e:
+        log.error(
+            "[DM_FAILED] Failed to send closure DM to user %s for ticket %s: %s",
+            ticket["user_id"], ticket["id"], e, exc_info=True
+        )
 
     # Delete the channel
+    log.info("[CHANNEL_DELETE] Attempting to delete channel %s for ticket %s", channel.id, ticket["id"])
     try:
         await channel.delete(reason=f"Ticket #{ticket['id']} closed by {closed_by}")
+        log.info("[CHANNEL_DELETE] Successfully deleted channel %s for ticket %s", channel.id, ticket["id"])
     except discord.Forbidden as e:
-        audit = permission_audit.audit_permissions(
-            guild,
-            "category_management",
-            channel=channel,
-            context="close_ticket_delete_forbidden",
-        )
         log.error(
-            "[PERMISSION_ERROR] Cannot delete ticket channel %s: %s missing=%s",
-            channel.id, e, audit.missing_labels,
+            "[PERMISSION_ERROR] Cannot delete ticket channel %s: %s",
+            channel.id, e, exc_info=True
         )
     except (discord.HTTPException, discord.NotFound) as e:
-        log.warning("Failed to delete ticket channel %s: %s", channel.id, e)
+        log.error(
+            "[CHANNEL_DELETE] Failed to delete ticket channel %s: %s",
+            channel.id, e, exc_info=True
+        )
 
+    log.info("[CLOSE_WORKFLOW] Close workflow completed for ticket %s", ticket["id"])
     return True, ticket
 
 

@@ -11,8 +11,8 @@ import re
 
 import discord
 from bot.database import queries
-from bot.services.permission_service import build_category_overwrites
-from bot.services import message_style, permission_audit
+from bot.services.permission_service import build_category_overwrites, validate_ticket_workflow, PREFLIGHT_FAILURE_MESSAGE
+from bot.services import message_style
 
 log = logging.getLogger(__name__)
 
@@ -157,13 +157,15 @@ async def open_ticket(
         log.error("Failed to resolve target guild: %s", e, exc_info=True)
         return "Failed to resolve target server for ticket creation."
 
-    audit = permission_audit.audit_permissions(
-        target_guild,
-        "ticket_workflow",
-        context="ticket_creation",
-    )
-    if not audit.ok:
-        return permission_audit.missing_permissions_message(audit)
+    # ATOMIC PREFLIGHT VALIDATION
+    # Validate all required permissions and category access BEFORE creating any infrastructure
+    # This ensures no partial ticket state is created if validation fails
+    if not validate_ticket_workflow(target_guild):
+        log.error(
+            "[TICKET_CREATE] Preflight validation failed for guild %s - aborting ticket creation",
+            target_guild.id
+        )
+        return PREFLIGHT_FAILURE_MESSAGE
 
     # Community uniqueness: one open ticket per source guild (persists after /leave)
     community_guild_id = source_guild_id or guild.id
@@ -207,16 +209,11 @@ async def open_ticket(
     try:
         discord_category = await _get_or_create_discord_category(target_guild, category_name)
     except discord.Forbidden as e:
-        audit = permission_audit.audit_permissions(
-            target_guild,
-            "category_management",
-            context="ticket_creation_category_forbidden",
-        )
         log.error(
-            "Permission denied when creating category in guild %s: %s. Missing permissions: %s",
-            target_guild.id, e, audit.missing_labels
+            "[PERMISSION_ERROR] Permission denied when creating category in guild %s: %s",
+            target_guild.id, e, exc_info=True
         )
-        return permission_audit.missing_permissions_message(audit)
+        return PREFLIGHT_FAILURE_MESSAGE
     except discord.HTTPException as e:
         log.error("HTTP error when creating category in guild %s: %s", target_guild.id, e, exc_info=True)
         return "Failed to create ticket category due to a Discord API error. Please try again."
@@ -239,17 +236,11 @@ async def open_ticket(
         )
         log.info("Successfully created channel %s (ID: %s) in guild %s", channel_name, channel.id, target_guild.id)
     except discord.Forbidden as e:
-        audit = permission_audit.audit_permissions(
-            target_guild,
-            "category_management",
-            channel=discord_category,
-            context="ticket_creation_channel_forbidden",
-        )
         log.error(
-            "Permission denied when creating channel in guild %s: %s. Missing permissions: %s",
-            target_guild.id, e, audit.missing_labels
+            "[PERMISSION_ERROR] Permission denied when creating channel in guild %s: %s",
+            target_guild.id, e, exc_info=True
         )
-        return permission_audit.missing_permissions_message(audit)
+        return PREFLIGHT_FAILURE_MESSAGE
     except discord.HTTPException as e:
         log.error("HTTP error when creating channel in guild %s: %s", target_guild.id, e, exc_info=True)
         return "Failed to create ticket channel due to a Discord API error. Please try again."
@@ -283,15 +274,6 @@ async def open_ticket(
     # Post opening header in staff channel
     # Include source guild identity if cross-server
     try:
-        dashboard_audit = permission_audit.audit_permissions(
-            target_guild,
-            "dashboard_setup",
-            channel=channel,
-            context="ticket_creation_dashboard",
-        )
-        if not dashboard_audit.ok:
-            return permission_audit.missing_permissions_message(dashboard_audit)
-
         if source_guild_id and source_guild:
             source_name = source_guild.name
             header = f"🌐 Source: **{source_name}**\n🎫 Ticket `#{display_ticket_number}`"

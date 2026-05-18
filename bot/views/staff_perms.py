@@ -13,7 +13,8 @@ from discord import ui
 
 from bot.config import RELAY_COLOR
 from bot.database import queries
-from bot.services import message_style, permission_audit
+from bot.services import message_style
+from bot.services.permission_service import PREFLIGHT_FAILURE_MESSAGE
 
 log = logging.getLogger(__name__)
 
@@ -132,24 +133,19 @@ class _CapabilityToggle(ui.Button):
 
             await interaction.response.edit_message(view=self.view_ref)
         except discord.Forbidden as e:
-            audit = permission_audit.audit_permissions(
-                self.view_ref.guild,
-                "staff_role_sync",
-                context="staff_perms_toggle_forbidden",
-            )
             log.error(
-                "[PERMISSION_ERROR] Forbidden in StaffPerms toggle for user %s: %s missing=%s",
-                interaction.user.id, e, audit.missing_labels, exc_info=True
+                "[PERMISSION_ERROR] Forbidden in StaffPerms toggle for user %s: %s",
+                interaction.user.id, e, exc_info=True
             )
             try:
                 if not interaction.response.is_done():
                     await interaction.response.send_message(
-                        embed=permission_audit.missing_permissions_embed(audit),
+                        embed=message_style.error_embed(PREFLIGHT_FAILURE_MESSAGE),
                         ephemeral=True,
                     )
                 else:
                     await interaction.followup.send(
-                        embed=permission_audit.missing_permissions_embed(audit),
+                        embed=message_style.error_embed(PREFLIGHT_FAILURE_MESSAGE),
                         ephemeral=True,
                     )
             except Exception:

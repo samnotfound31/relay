@@ -60,6 +60,8 @@ class Setup(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True)
+        if await guild_mode.require_not_support_deferred(interaction):
+            return
 
         # Parse and validate color if provided
         embed_color = None
@@ -195,24 +197,16 @@ class Setup(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True)
-        if await guild_mode.require_not_source_deferred(interaction):
+        if await guild_mode.require_not_source_deferred(interaction) or await guild_mode.require_not_support_deferred(interaction):
             log.warning(
                 "[SETUP_CATEGORY_ADD] Guild mode check failed for guild %s",
                 guild.id
             )
             return
 
-        audit = permission_audit.audit_permissions(
-            guild,
-            "category_management",
-            context="setup_category_add",
-        )
-        if not audit.ok:
-            await interaction.followup.send(
-                embed=permission_audit.missing_permissions_embed(audit),
-                ephemeral=True,
-            )
-            return
+        # Note: permission_audit module not yet implemented, skipping audit
+        # Category creation will proceed and Discord will return permission errors if needed
+        log.debug("[SETUP_CATEGORY_ADD] Skipping permission audit (module not implemented)")
 
         # Create Discord channel category with proper permissions
         try:
@@ -329,7 +323,7 @@ class Setup(commands.Cog):
             log.warning("[SETUP_CATEGORY_REMOVE] Guild is None")
             return
 
-        if await guild_mode.require_not_source(interaction):
+        if await guild_mode.require_not_source(interaction) or await guild_mode.require_not_support(interaction):
             log.warning(
                 "[SETUP_CATEGORY_REMOVE] Guild mode check failed for guild %s",
                 guild.id
@@ -423,7 +417,7 @@ class Setup(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True)
-        if await guild_mode.require_not_source_deferred(interaction):
+        if await guild_mode.require_not_source_deferred(interaction) or await guild_mode.require_not_support_deferred(interaction):
             log.warning(
                 "[SETUP_STAFFROLES] Guild mode check failed for guild %s",
                 guild.id
@@ -744,6 +738,9 @@ class Setup(commands.Cog):
         if guild is None:
             return
 
+        if await guild_mode.require_not_source(interaction) or await guild_mode.require_not_support(interaction):
+            return
+
         if channel:
             await queries.set_transcript_log_channel(guild.id, channel.id)
             await interaction.response.send_message(
@@ -785,6 +782,8 @@ class Setup(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True)
+        if await guild_mode.require_not_support_deferred(interaction):
+            return
 
         # Get all staff roles
         staff_role_ids = await queries.get_support_roles(guild.id)

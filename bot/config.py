@@ -13,7 +13,14 @@ BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
 BOT_PREFIX: str = os.getenv("BOT_PREFIX", "!")
 
 # ── Database ──────────────────────────────────────────
-DB_PATH: str = os.path.join(os.path.dirname(__file__), "..", "data", "relay.db")
+_DEFAULT_DATABASE_PATH: str = os.path.join(os.path.dirname(__file__), "..", "data", "relay.db")
+DATABASE_PATH: str = os.getenv("DATABASE_PATH", _DEFAULT_DATABASE_PATH)
+DB_PATH: str = DATABASE_PATH
+
+# ── Heartbeat / API ───────────────────────────────────
+API_BASE_URL: str = os.getenv("API_BASE_URL", "http://localhost:3001")
+HEARTBEAT_INTERVAL: int = int(os.getenv("HEARTBEAT_INTERVAL", "30"))
+RELAY_HEARTBEAT_SECRET: str = os.getenv("RELAY_HEARTBEAT_SECRET", "")
 
 # ── Branding ──────────────────────────────────────────
 RELAY_COLOR       = 0x5865F2   # Discord blurple – calm, modern

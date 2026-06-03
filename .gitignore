@@ -38,5 +38,25 @@ Thumbs.db
 *.swp
 *.swo
 
+# Node
+node_modules/
+
 # Windsurf
 .windsurf/
+
+# Website — separate repository after split
+relay-website/
+website/
+
+# Runtime data
+data/
+
+# Monorepo-only documentation (not bot code)
+DOCUMENTATION.md
+FINAL_FIX.md
+RED_P0_FIXES.md
+RED_TEAM_WEBSITE.md
+
+# Test and session output files
+*.txt
+*.out

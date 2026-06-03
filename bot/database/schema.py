@@ -16,6 +16,11 @@ CREATE TABLE IF NOT EXISTS guild_settings (
     banner_url          TEXT,
     emojilist_channel_id INTEGER,          -- Channel with emoji registry message
     emojilist_message_id INTEGER,          -- Message ID of emoji registry
+    panel_title         TEXT,             -- Custom panel embed title
+    panel_color         TEXT,             -- Custom panel embed color (hex)
+    panel_description   TEXT,             -- Custom panel embed description
+    panel_button_label  TEXT,             -- Custom panel button label
+    panel_footer_text   TEXT,             -- Custom panel footer text
     created_at          TEXT DEFAULT (datetime('now'))
 );
 
@@ -41,11 +46,18 @@ CREATE TABLE IF NOT EXISTS ticket_categories (
 -- Active tickets
 CREATE TABLE IF NOT EXISTS tickets (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_id       TEXT,
     guild_id        INTEGER NOT NULL,     -- Where the channel lives (support guild)
     user_id         INTEGER NOT NULL,
+    user_name       TEXT,
     channel_id      INTEGER UNIQUE,
+    staff_channel_id INTEGER,
+    dm_channel_id   INTEGER,
+    category_id     INTEGER,
     category_name   TEXT,
     claimed_by      INTEGER,
+    claimed_by_name TEXT,
+    claimed_at      TEXT,
     status          TEXT DEFAULT 'open',
     ticket_status   TEXT DEFAULT 'open',  -- Phase 2: workflow status
     priority        TEXT DEFAULT 'medium', -- Pre-Phase 3: urgency level
@@ -55,6 +67,11 @@ CREATE TABLE IF NOT EXISTS tickets (
     relay_session_left_at TEXT,
     needs_rename_resync INTEGER DEFAULT 0,
     ticket_context_issue TEXT,
+    close_reason    TEXT,
+    closed_by       INTEGER,
+    last_user_message_at TEXT,
+    last_staff_message_at TEXT,
+    updated_at      TEXT DEFAULT (datetime('now')),
     scheduled_close_at TEXT,                  -- Phase 4: autoclose timestamp
     autoclose_duration   TEXT,                -- Phase 4: e.g. "25m" for logging
     autoclose_closure_message TEXT,
@@ -62,6 +79,19 @@ CREATE TABLE IF NOT EXISTS tickets (
     is_inactive     INTEGER DEFAULT 0,    -- Phase 2: inactivity flag
     created_at      TEXT DEFAULT (datetime('now')),
     closed_at       TEXT
+);
+
+CREATE TABLE IF NOT EXISTS ticket_events (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_db_id    INTEGER NOT NULL,
+    guild_id        INTEGER NOT NULL,
+    ticket_id       TEXT,
+    event_type      TEXT NOT NULL,
+    actor_id        INTEGER,
+    actor_name      TEXT,
+    details         TEXT,
+    metadata_json   TEXT,
+    created_at      TEXT DEFAULT (datetime('now'))
 );
 
 -- Phase 2: Staff personal emojis
@@ -177,6 +207,26 @@ MIGRATIONS = [
     "CREATE TABLE IF NOT EXISTS onboarding_state (id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT NOT NULL, entity_id INTEGER NOT NULL, guild_id INTEGER NOT NULL, delivered_at TEXT DEFAULT (datetime('now')), UNIQUE(scope, entity_id, guild_id))",
     # Phase 6: Role permission overrides (denylist-style control)
     "CREATE TABLE IF NOT EXISTS role_permissions (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, role_id INTEGER NOT NULL, capability TEXT NOT NULL, UNIQUE(guild_id, role_id, capability))",
+    # Phase 7: Panel customization
+    "ALTER TABLE guild_settings ADD COLUMN panel_title TEXT",
+    "ALTER TABLE guild_settings ADD COLUMN panel_color TEXT",
+    "ALTER TABLE guild_settings ADD COLUMN panel_description TEXT",
+    "ALTER TABLE guild_settings ADD COLUMN panel_button_label TEXT",
+    "ALTER TABLE guild_settings ADD COLUMN panel_footer_text TEXT",
+    # Live ticket state + lifecycle logs
+    "ALTER TABLE tickets ADD COLUMN ticket_id TEXT",
+    "ALTER TABLE tickets ADD COLUMN user_name TEXT",
+    "ALTER TABLE tickets ADD COLUMN staff_channel_id INTEGER",
+    "ALTER TABLE tickets ADD COLUMN dm_channel_id INTEGER",
+    "ALTER TABLE tickets ADD COLUMN category_id INTEGER",
+    "ALTER TABLE tickets ADD COLUMN claimed_by_name TEXT",
+    "ALTER TABLE tickets ADD COLUMN claimed_at TEXT",
+    "ALTER TABLE tickets ADD COLUMN close_reason TEXT",
+    "ALTER TABLE tickets ADD COLUMN closed_by INTEGER",
+    "ALTER TABLE tickets ADD COLUMN last_user_message_at TEXT",
+    "ALTER TABLE tickets ADD COLUMN last_staff_message_at TEXT",
+    "ALTER TABLE tickets ADD COLUMN updated_at TEXT DEFAULT (datetime('now'))",
+    "CREATE TABLE IF NOT EXISTS ticket_events (id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_db_id INTEGER NOT NULL, guild_id INTEGER NOT NULL, ticket_id TEXT, event_type TEXT NOT NULL, actor_id INTEGER, actor_name TEXT, details TEXT, metadata_json TEXT, created_at TEXT DEFAULT (datetime('now')))",
 ]
 
 
@@ -193,3 +243,32 @@ async def initialize_schema() -> None:
             await db.commit()
         except Exception:
             pass  # Column/table already exists
+
+
+BACKFILL_EVENT_OWNERSHIP_SQL = """
+UPDATE ticket_events
+SET guild_id = (
+    SELECT tickets.source_guild_id
+    FROM tickets
+    WHERE tickets.id = ticket_events.ticket_db_id
+)
+WHERE EXISTS (
+    SELECT 1
+    FROM tickets
+    WHERE tickets.id = ticket_events.ticket_db_id
+      AND tickets.source_guild_id IS NOT NULL
+      AND tickets.source_guild_id != ticket_events.guild_id
+);
+"""
+
+
+async def backfill_event_ownership() -> int:
+    """
+    Migrate existing ticket_events rows so that guild_id reflects source guild ownership.
+    For linked tickets, ticket_events.guild_id is set to tickets.source_guild_id.
+    Returns number of rows updated.
+    """
+    db = await get_connection()
+    cursor = await db.execute(BACKFILL_EVENT_OWNERSHIP_SQL)
+    await db.commit()
+    return cursor.rowcount

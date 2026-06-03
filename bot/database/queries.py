@@ -5,6 +5,7 @@ All DB access goes through these async helpers.
 
 from __future__ import annotations
 from typing import Any
+import json
 from bot.database.connection import get_connection
 
 
@@ -139,6 +140,7 @@ async def create_ticket(
     guild_id: int,
     user_id: int,
     channel_id: int,
+    user_name: str | None = None,
     category_name: str | None = None,
     source_guild_id: int | None = None,
 ) -> dict:
@@ -156,19 +158,44 @@ async def create_ticket(
     )
     row = await cursor.fetchone()
     community_ticket_number = row["next_number"] if row else 1
+    category_id = None
+    if category_name:
+        cat_cursor = await db.execute(
+            "SELECT id FROM ticket_categories WHERE guild_id = ? AND name = ?",
+            (guild_id, category_name),
+        )
+        cat_row = await cat_cursor.fetchone()
+        category_id = cat_row["id"] if cat_row else None
+
     cursor = await db.execute(
         """INSERT INTO tickets
-           (guild_id, user_id, channel_id, category_name, source_guild_id,
-            community_ticket_number, ticket_status, relay_session_status, last_activity_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'open', 'active', datetime('now'))""",
+           (guild_id, user_id, user_name, channel_id, staff_channel_id, dm_channel_id,
+            category_id, category_name, source_guild_id, community_ticket_number,
+            ticket_status, relay_session_status, last_activity_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', 'active', datetime('now'), datetime('now'))""",
         (
-            guild_id, user_id, channel_id, category_name, source_guild_id,
+            guild_id, user_id, user_name or str(user_id), channel_id, channel_id, None,
+            category_id, category_name, source_guild_id,
             community_ticket_number,
         ),
     )
+    ticket_db_id = cursor.lastrowid
+    await db.execute(
+        "UPDATE tickets SET ticket_id = ?, updated_at = datetime('now') WHERE id = ?",
+        (f"T-{ticket_db_id}", ticket_db_id),
+    )
     await db.commit()
+    await log_ticket_event(
+        ticket_db_id=ticket_db_id,
+        guild_id=source_guild_id or guild_id,
+        ticket_id=f"T-{ticket_db_id}",
+        event_type="ticket_created",
+        actor_id=user_id,
+        actor_name=user_name or str(user_id),
+        details=f"Ticket #{community_ticket_number} created",
+    )
     return {
-        "id": cursor.lastrowid,
+        "id": ticket_db_id,
         "community_ticket_number": community_ticket_number,
     }
 
@@ -271,23 +298,25 @@ async def disconnect_relay_session(ticket_id: int) -> bool:
     return cursor.rowcount > 0
 
 
-async def claim_ticket(channel_id: int, staff_id: int) -> bool:
+async def claim_ticket(channel_id: int, staff_id: int, staff_name: str | None = None) -> bool:
     db = await get_connection()
     cursor = await db.execute(
-        """UPDATE tickets SET claimed_by = ?, last_activity_at = datetime('now')
+        """UPDATE tickets
+           SET claimed_by = ?, claimed_by_name = ?, claimed_at = datetime('now'), last_activity_at = datetime('now'), updated_at = datetime('now')
            WHERE channel_id = ? AND status = 'open'""",
-        (staff_id, channel_id),
+        (staff_id, staff_name or str(staff_id), channel_id),
     )
     await db.commit()
     return cursor.rowcount > 0
 
 
-async def transfer_ticket(channel_id: int, new_staff_id: int) -> bool:
+async def transfer_ticket(channel_id: int, new_staff_id: int, staff_name: str | None = None) -> bool:
     db = await get_connection()
     cursor = await db.execute(
-        """UPDATE tickets SET claimed_by = ?, last_activity_at = datetime('now')
+        """UPDATE tickets
+           SET claimed_by = ?, claimed_by_name = ?, claimed_at = datetime('now'), last_activity_at = datetime('now'), updated_at = datetime('now')
            WHERE channel_id = ? AND status = 'open'""",
-        (new_staff_id, channel_id),
+        (new_staff_id, staff_name or str(new_staff_id), channel_id),
     )
     await db.commit()
     return cursor.rowcount > 0
@@ -297,7 +326,8 @@ async def unclaim_ticket(channel_id: int) -> bool:
     """Clear ownership — return ticket to open queue."""
     db = await get_connection()
     cursor = await db.execute(
-        """UPDATE tickets SET claimed_by = NULL, last_activity_at = datetime('now')
+        """UPDATE tickets
+           SET claimed_by = NULL, claimed_by_name = NULL, claimed_at = NULL, last_activity_at = datetime('now'), updated_at = datetime('now')
            WHERE channel_id = ? AND status = 'open'""",
         (channel_id,),
     )
@@ -308,7 +338,7 @@ async def unclaim_ticket(channel_id: int) -> bool:
 async def update_ticket_status(channel_id: int, ticket_status: str) -> bool:
     db = await get_connection()
     cursor = await db.execute(
-        """UPDATE tickets SET ticket_status = ?, last_activity_at = datetime('now')
+        """UPDATE tickets SET ticket_status = ?, last_activity_at = datetime('now'), updated_at = datetime('now')
            WHERE channel_id = ? AND status = 'open'""",
         (ticket_status, channel_id),
     )
@@ -316,7 +346,7 @@ async def update_ticket_status(channel_id: int, ticket_status: str) -> bool:
     return cursor.rowcount > 0
 
 
-async def close_ticket(channel_id: int) -> dict | None:
+async def close_ticket(channel_id: int, closed_by: int | None = None, close_reason: str | None = None) -> dict | None:
     db = await get_connection()
     cursor = await db.execute(
         "SELECT * FROM tickets WHERE channel_id = ? AND status = 'open'",
@@ -329,9 +359,10 @@ async def close_ticket(channel_id: int) -> dict | None:
     await db.execute(
         """UPDATE tickets
            SET status = 'closed', ticket_status = 'closed',
-               closed_at = datetime('now'), last_activity_at = datetime('now')
+               closed_at = datetime('now'), last_activity_at = datetime('now'),
+               updated_at = datetime('now'), closed_by = ?, close_reason = ?
            WHERE id = ?""",
-        (ticket["id"],),
+        (closed_by, close_reason, ticket["id"]),
     )
     await db.commit()
     return ticket
@@ -341,7 +372,7 @@ async def close_ticket(channel_id: int) -> dict | None:
 async def update_ticket_priority(channel_id: int, priority: str) -> bool:
     db = await get_connection()
     cursor = await db.execute(
-        """UPDATE tickets SET priority = ?, last_activity_at = datetime('now')
+        """UPDATE tickets SET priority = ?, last_activity_at = datetime('now'), updated_at = datetime('now')
            WHERE channel_id = ? AND status = 'open'""",
         (priority, channel_id),
     )
@@ -364,7 +395,7 @@ async def move_ticket_category(channel_id: int, new_category_name: str) -> bool:
     """Update the ticket's category_name in DB."""
     db = await get_connection()
     cursor = await db.execute(
-        """UPDATE tickets SET category_name = ?, last_activity_at = datetime('now')
+        """UPDATE tickets SET category_name = ?, last_activity_at = datetime('now'), updated_at = datetime('now')
            WHERE channel_id = ? AND status = 'open'""",
         (new_category_name, channel_id),
     )
@@ -375,11 +406,56 @@ async def touch_ticket_activity(channel_id: int) -> None:
     """Update the last_activity_at timestamp."""
     db = await get_connection()
     await db.execute(
-        """UPDATE tickets SET last_activity_at = datetime('now'), is_inactive = 0
+        """UPDATE tickets SET last_activity_at = datetime('now'), is_inactive = 0, updated_at = datetime('now')
            WHERE channel_id = ? AND status = 'open'""",
         (channel_id,),
     )
     await db.commit()
+
+
+async def mark_user_reply(channel_id: int, user_id: int | None = None, user_name: str | None = None) -> dict | None:
+    db = await get_connection()
+    cursor = await db.execute(
+        """UPDATE tickets
+           SET last_user_message_at = datetime('now'), last_activity_at = datetime('now'),
+               updated_at = datetime('now'), is_inactive = 0
+           WHERE channel_id = ? AND status = 'open'""",
+        (channel_id,),
+    )
+    await db.commit()
+    if cursor.rowcount <= 0:
+        return None
+    ticket = await get_ticket_by_channel(channel_id)
+    if ticket:
+        await log_ticket_event(
+            ticket_db_id=ticket["id"], guild_id=ticket.get("source_guild_id") or ticket["guild_id"], ticket_id=ticket.get("ticket_id"),
+            event_type="user_replied", actor_id=user_id or ticket["user_id"],
+            actor_name=user_name or ticket.get("user_name") or str(ticket["user_id"]),
+            details="User replied in DM",
+        )
+    return ticket
+
+
+async def mark_staff_reply(channel_id: int, staff_id: int, staff_name: str | None = None) -> dict | None:
+    db = await get_connection()
+    cursor = await db.execute(
+        """UPDATE tickets
+           SET last_staff_message_at = datetime('now'), last_activity_at = datetime('now'),
+               updated_at = datetime('now'), is_inactive = 0
+           WHERE channel_id = ? AND status = 'open'""",
+        (channel_id,),
+    )
+    await db.commit()
+    if cursor.rowcount <= 0:
+        return None
+    ticket = await get_ticket_by_channel(channel_id)
+    if ticket:
+        await log_ticket_event(
+            ticket_db_id=ticket["id"], guild_id=ticket.get("source_guild_id") or ticket["guild_id"], ticket_id=ticket.get("ticket_id"),
+            event_type="staff_replied", actor_id=staff_id,
+            actor_name=staff_name or str(staff_id), details="Staff replied to user",
+        )
+    return ticket
 
 
 async def get_inactive_tickets(guild_id: int, threshold_seconds: int) -> list[dict]:
@@ -692,6 +768,36 @@ async def get_reminder_for_staff(ticket_id: int, staff_id: int) -> dict | None:
     )
     row = await cursor.fetchone()
     return dict(row) if row else None
+
+
+async def log_ticket_event(
+    ticket_db_id: int,
+    guild_id: int,
+    ticket_id: str | None,
+    event_type: str,
+    actor_id: int | None = None,
+    actor_name: str | None = None,
+    details: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> int:
+    db = await get_connection()
+    cursor = await db.execute(
+        """INSERT INTO ticket_events
+           (ticket_db_id, guild_id, ticket_id, event_type, actor_id, actor_name, details, metadata_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            ticket_db_id,
+            guild_id,
+            ticket_id,
+            event_type,
+            actor_id,
+            actor_name,
+            details,
+            json.dumps(metadata) if metadata else None,
+        ),
+    )
+    await db.commit()
+    return cursor.lastrowid
 
 
 # ── Transcripts ───────────────────────────────────────

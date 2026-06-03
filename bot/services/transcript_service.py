@@ -14,6 +14,7 @@ Design philosophy:
 from __future__ import annotations
 
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,13 +25,17 @@ from fpdf import FPDF
 log = logging.getLogger("relay.transcript")
 
 # ── Storage ───────────────────────────────────────────────────────────────
-TRANSCRIPT_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "transcripts"
+_ROOT_DIR = Path(__file__).resolve().parent.parent.parent
+_DEFAULT_TRANSCRIPT_DIR = _ROOT_DIR / "data" / "transcripts"
+TRANSCRIPT_DIR = Path(os.getenv("TRANSCRIPT_DIR", str(_DEFAULT_TRANSCRIPT_DIR)))
 TRANSCRIPT_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Font Resolution ───────────────────────────────────────────────────────
+_DEFAULT_FONT_DIR = _ROOT_DIR / "data" / "fonts"
+FONT_DIR = Path(os.getenv("FONT_DIR", str(_DEFAULT_FONT_DIR)))
 _FONT_CANDIDATES = [
-    Path(__file__).resolve().parent.parent.parent / "data" / "fonts",
-    Path(__file__).resolve().parent.parent.parent / "fonts",
+    FONT_DIR,
+    _ROOT_DIR / "fonts",
 ]
 
 

@@ -43,15 +43,27 @@ async def resolve_guild_mode(guild_id: int) -> GuildMode:
     return GuildMode.LOCAL
 
 
-# ── Command Guard ────────────────────────────────────
+# ── Command Guards ───────────────────────────────────
 
 SOURCE_BLOCKED_MSG = (
     "⚠️ This server is configured as a Relay source guild.\n"
     "Ticket management must be performed in the linked support server."
 )
 
+SUPPORT_BLOCKED_MSG = (
+    "⚠️ This server is configured as a Relay support server.\n"
+    "Configuration is managed from the linked source server."
+)
+
 # Commands allowed in SOURCE guilds (everything else blocked)
 SOURCE_ALLOWED_COMMANDS = {"announce", "unlinksupport"}
+
+# Configuration commands blocked in SUPPORT guilds
+# These commands modify settings and must run on source/local guilds
+SUPPORT_BLOCKED_COMMANDS = {
+    "announce", "category", "staffroles", "logchannel",
+    "staffperms", "linksupport", "unlinksupport",
+}
 
 
 async def require_not_source(interaction: discord.Interaction) -> bool:
@@ -87,6 +99,44 @@ async def require_not_source_deferred(interaction: discord.Interaction) -> bool:
     if mode == GuildMode.SOURCE:
         await interaction.followup.send(
             embed=message_style.error_embed(SOURCE_BLOCKED_MSG),
+            ephemeral=True,
+        )
+        return True  # Blocked
+    return False  # Allowed
+
+
+async def require_not_support(interaction: discord.Interaction) -> bool:
+    """
+    Guard: returns True if the guild is SUPPORT (command should abort).
+    Blocks configuration commands in support guilds.
+
+    Use this BEFORE any ``interaction.response.defer()`` call.
+    """
+    if interaction.guild is None:
+        return False
+
+    mode = await resolve_guild_mode(interaction.guild_id)
+    if mode == GuildMode.SUPPORT:
+        await interaction.response.send_message(
+            embed=message_style.error_embed(SUPPORT_BLOCKED_MSG),
+            ephemeral=True,
+        )
+        return True  # Blocked
+    return False  # Allowed
+
+
+async def require_not_support_deferred(interaction: discord.Interaction) -> bool:
+    """
+    Same guard but uses followup (for already-deferred interactions).
+    Use this AFTER ``interaction.response.defer()`` has already been called.
+    """
+    if interaction.guild is None:
+        return False
+
+    mode = await resolve_guild_mode(interaction.guild_id)
+    if mode == GuildMode.SUPPORT:
+        await interaction.followup.send(
+            embed=message_style.error_embed(SUPPORT_BLOCKED_MSG),
             ephemeral=True,
         )
         return True  # Blocked

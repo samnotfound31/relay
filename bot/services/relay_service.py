@@ -225,6 +225,8 @@ async def relay_staff_to_user(
         )
         return False
 
+    await queries.mark_staff_reply(channel_id, staff_member.id, staff_member.display_name)
+
     # Post confirmation in staff channel (same plain format)
     staff_channel = bot.get_channel(channel_id)
     if staff_channel:

@@ -103,6 +103,9 @@ class _CapabilityToggle(ui.Button):
         )
         
         try:
+            # Re-read fresh state from DB before toggling
+            await self.view_ref.load_denied_capabilities()
+
             # Toggle denial state
             if self.capability in self.view_ref.denied_capabilities:
                 # Allow capability

@@ -300,6 +300,7 @@ async def open_ticket(
             guild_id=target_guild.id,
             user_id=user.id,
             channel_id=channel.id,
+            user_name=getattr(user, "display_name", None) or user.name,
             category_name=category_name,
             source_guild_id=source_guild_id,
         )

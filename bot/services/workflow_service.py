@@ -194,8 +194,13 @@ async def claim_ticket(
         name = claimer.display_name if claimer else f"User {ticket['claimed_by']}"
         return False, f"Already claimed by **{name}**."
 
-    await queries.claim_ticket(channel.id, staff_member.id)
+    await queries.claim_ticket(channel.id, staff_member.id, staff_member.display_name)
     ticket["claimed_by"] = staff_member.id
+    await queries.log_ticket_event(
+        ticket_db_id=ticket["id"], guild_id=ticket.get("source_guild_id") or ticket["guild_id"], ticket_id=ticket.get("ticket_id"),
+        event_type="ticket_claimed", actor_id=staff_member.id, actor_name=staff_member.display_name,
+        details="Ticket claimed",
+    )
     warning = await governed_rename_ticket_channel(channel, ticket, bot)
     msg = f"Ticket claimed by {staff_member.mention}."
     if warning:
@@ -213,8 +218,13 @@ async def transfer_ticket(
     if ticket is None:
         return False, "No open ticket found in this channel."
 
-    await queries.transfer_ticket(channel.id, new_staff.id)
+    await queries.transfer_ticket(channel.id, new_staff.id, new_staff.display_name)
     ticket["claimed_by"] = new_staff.id
+    await queries.log_ticket_event(
+        ticket_db_id=ticket["id"], guild_id=ticket.get("source_guild_id") or ticket["guild_id"], ticket_id=ticket.get("ticket_id"),
+        event_type="ticket_claimed", actor_id=new_staff.id, actor_name=new_staff.display_name,
+        details="Ticket transferred",
+    )
     warning = await governed_rename_ticket_channel(channel, ticket, bot)
     msg = f"Ticket transferred to {new_staff.mention}."
     if warning:
@@ -241,6 +251,10 @@ async def set_ticket_status(
         # Return to queue: clear ownership + status
         await queries.unclaim_ticket(channel.id)
         await queries.update_ticket_status(channel.id, "open")
+        await queries.log_ticket_event(
+            ticket_db_id=ticket["id"], guild_id=ticket.get("source_guild_id") or ticket["guild_id"], ticket_id=ticket.get("ticket_id"),
+            event_type="ticket_unclaimed", details="Ticket returned to open queue",
+        )
         ticket["claimed_by"] = None
         ticket["ticket_status"] = "open"
         warning = await governed_rename_ticket_channel(channel, ticket, bot)
@@ -251,6 +265,11 @@ async def set_ticket_status(
 
     await queries.update_ticket_status(channel.id, status)
     ticket["ticket_status"] = status
+    await queries.log_ticket_event(
+        ticket_db_id=ticket["id"], guild_id=ticket.get("source_guild_id") or ticket["guild_id"], ticket_id=ticket.get("ticket_id"),
+        event_type="ticket_status_changed", details=f"Status set to {status}",
+        metadata={"status": status},
+    )
     warning = await governed_rename_ticket_channel(channel, ticket, bot)
 
     status_emoji = STATUS_EMOJIS.get(status, "")
@@ -371,7 +390,7 @@ async def close_ticket(
         channel.id, closed_by.id
     )
 
-    ticket = await queries.close_ticket(channel.id)
+    ticket = await queries.close_ticket(channel.id, closed_by.id, closure_message)
     if ticket is None:
         log.error("[CLOSE_WORKFLOW] Failed to close ticket in database for channel %s", channel.id)
         return False, None
@@ -379,6 +398,11 @@ async def close_ticket(
     log.info(
         "[CLOSE_WORKFLOW] Ticket %s marked as closed in database",
         ticket["id"]
+    )
+    await queries.log_ticket_event(
+        ticket_db_id=ticket["id"], guild_id=ticket.get("source_guild_id") or ticket["guild_id"], ticket_id=ticket.get("ticket_id"),
+        event_type="ticket_closed", actor_id=closed_by.id, actor_name=closed_by.display_name,
+        details="Ticket closed",
     )
 
     # Clear all response reminders for this ticket
@@ -414,6 +438,11 @@ async def close_ticket(
                 closed_by=closed_by.id,
             )
             log.info("[TRANSCRIPT_UPLOAD] Transcript record created in database: %s", transcript_id)
+            await queries.log_ticket_event(
+                ticket_db_id=ticket["id"], guild_id=ticket.get("source_guild_id") or ticket["guild_id"], ticket_id=ticket.get("ticket_id"),
+                event_type="transcript_generated", actor_id=closed_by.id, actor_name=closed_by.display_name,
+                details="Transcript generated", metadata={"transcript_id": str(transcript_id)},
+            )
 
             # Log to transcript channel
             log_channel = await _get_or_create_transcript_log_channel(guild)

@@ -59,6 +59,11 @@ class Events(commands.Cog):
         if ticket:
             # Touch activity timestamp
             await queries.touch_ticket_activity(ticket["channel_id"])
+            await queries.mark_user_reply(
+                ticket["channel_id"],
+                message.author.id,
+                message.author.display_name,
+            )
 
             # Cancel any pending autoclose due to user activity
             if ticket.get("scheduled_close_at"):

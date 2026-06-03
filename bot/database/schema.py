@@ -3,7 +3,11 @@ Relay Bot — Database Schema
 Creates all required tables and runs migrations.
 """
 
+import logging
+
 from bot.database.connection import get_connection
+
+log = logging.getLogger("relay.schema")
 
 
 SCHEMA_SQL = """
@@ -182,7 +186,8 @@ MIGRATIONS = [
     # Phase 2 migrations
     "ALTER TABLE ticket_categories ADD COLUMN discord_category_id INTEGER",
     "ALTER TABLE tickets ADD COLUMN ticket_status TEXT DEFAULT 'open'",
-    "ALTER TABLE tickets ADD COLUMN last_activity_at TEXT DEFAULT (datetime('now'))",
+    "ALTER TABLE tickets ADD COLUMN last_activity_at TEXT",
+    "UPDATE tickets SET last_activity_at = datetime('now') WHERE last_activity_at IS NULL",
     "ALTER TABLE tickets ADD COLUMN is_inactive INTEGER DEFAULT 0",
     "ALTER TABLE guild_settings ADD COLUMN emojilist_channel_id INTEGER",
     "ALTER TABLE guild_settings ADD COLUMN emojilist_message_id INTEGER",
@@ -225,7 +230,8 @@ MIGRATIONS = [
     "ALTER TABLE tickets ADD COLUMN closed_by INTEGER",
     "ALTER TABLE tickets ADD COLUMN last_user_message_at TEXT",
     "ALTER TABLE tickets ADD COLUMN last_staff_message_at TEXT",
-    "ALTER TABLE tickets ADD COLUMN updated_at TEXT DEFAULT (datetime('now'))",
+    "ALTER TABLE tickets ADD COLUMN updated_at TEXT",
+    "UPDATE tickets SET updated_at = datetime('now') WHERE updated_at IS NULL",
     "CREATE TABLE IF NOT EXISTS ticket_events (id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_db_id INTEGER NOT NULL, guild_id INTEGER NOT NULL, ticket_id TEXT, event_type TEXT NOT NULL, actor_id INTEGER, actor_name TEXT, details TEXT, metadata_json TEXT, created_at TEXT DEFAULT (datetime('now')))",
 ]
 
@@ -236,13 +242,21 @@ async def initialize_schema() -> None:
     await db.executescript(SCHEMA_SQL)
     await db.commit()
 
-    # Run migrations (ignore errors for already-applied columns)
+    # Run migrations — safe to run multiple times, skips duplicate columns
     for migration in MIGRATIONS:
         try:
             await db.execute(migration)
             await db.commit()
-        except Exception:
-            pass  # Column/table already exists
+            log.info("Migration applied: %s", migration)
+        except Exception as exc:
+            err = str(exc).lower()
+            if "duplicate column" in err:
+                log.debug("Column already exists, skipping: %s", migration)
+            elif "already exists" in err:
+                log.debug("Table already exists, skipping: %s", migration)
+            else:
+                log.error("Migration FAILED: %s — %s", migration, exc)
+                raise
 
 
 BACKFILL_EVENT_OWNERSHIP_SQL = """
